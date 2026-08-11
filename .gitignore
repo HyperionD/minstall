@@ -4,3 +4,5 @@ target/
 .pio/
 *.log
 .DS_Store
+.worktrees/
+.superpowers/
