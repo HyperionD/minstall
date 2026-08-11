@@ -28,7 +28,7 @@
 | `0000fe95-0000-1000-8000-00805f9b34fb`（SERVICE_V2） | `0000005e-0000-1000-8000-00805f9b34fb`（V2 RX） | notify | V2 通道接收（读方向），待真机确认 |
 | 同上 | `0000005f-0000-1000-8000-00805f9b34fb`（V2 TX） | write | V2 通道发送（写方向），待真机确认 |
 | 同上 | `00002902-0000-1000-8000-00805f9b34fb`（CCC） | — | 特征配置描述符（enable notification），待真机确认 |
-| `0000fe95-...`（V1 同 service） | `00000051`（COMMAND_READ）、`00000052`（COMMAND_WRITE）、`00000053`（ACTIVITY_DATA）、`00000055`（DATA_UPLOAD） | — | Band 8 时代的 V1 特征；V2 使用 5e/5f，待真机确认 |
+| `0000fe95-0000-1000-8000-00805f9b34fb`（V1 同 service） | `00000051-0000-1000-8000-00805f9b34fb`（COMMAND_READ）、`00000052-0000-1000-8000-00805f9b34fb`（COMMAND_WRITE）、`00000053-0000-1000-8000-00805f9b34fb`（ACTIVITY_DATA）、`00000055-0000-1000-8000-00805f9b34fb`（DATA_UPLOAD） | — | Band 8 时代的 V1 特征；V2 使用 5e/5f，待真机确认 |
 
 ## 4. authkey 认证
 
@@ -75,7 +75,7 @@
 - 推送 service UUID：`0000fe95-...`（V2），待真机确认
 - 推送 characteristic UUID：命令走 V2 TX `...5f`；数据上传走 DATA 明文通道，待真机确认
 - 分块大小：`chunkSize` 由设备在 uploadAck 中给出（无则默认 2048）；每块 partSize = chunkSize - 4（至少 64）；ATT 层实际发送再按 maxWriteSize = mtu-3 切分。待真机确认
-- 帧格式（头部/序号/数据/校验）：
+- 帧格式：见第 4 节 V2 帧格式（头部/序号/数据/校验）
 
 **安装流程**（XiaomiWatchfaceService / HybridWatchface，待真机确认）：
 1. 发 `Command{type=4, subtype=4(CMD_WATCHFACE_INSTALL), Watchface.watchfaceInstallStart{id, size}}`（加密）
