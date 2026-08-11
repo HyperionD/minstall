@@ -183,8 +183,14 @@ def build_session_config(opcode: int, seq: int = 0) -> bytes:
 
 def build_protobuf_frame(seq: int, cmd_bytes: bytes, encrypt: bool = False, key: bytes | None = None) -> bytes:
     """PROTOBUF 通道 Data 帧。加密前（握手阶段）encrypt=False；后续加密命令 encrypt=True。"""
-    opcode = OP_ENCRYPTED if encrypt else OP_PLAINTEXT
-    body = encrypt_v2(key, cmd_bytes) if encrypt else cmd_bytes
+    if encrypt:
+        if key is None:
+            raise ValueError("encrypt=True 时须提供 key（AES-128 密钥，encrypt_v2 使用）")
+        opcode = OP_ENCRYPTED
+        body = encrypt_v2(key, cmd_bytes)
+    else:
+        opcode = OP_PLAINTEXT
+        body = cmd_bytes
     payload = bytes([CH_PROTOBUF & 0x0F, opcode & 0xFF]) + body
     return encode_v2_frame(PT_DATA, seq, payload)
 
@@ -547,8 +553,10 @@ def parse_auth_response(data: bytes, flow: str, authkey_hex: str | None = None,
     if flow == "session_response":
         if packet_type == PT_SESSION_CONFIG and payload and payload[0] == OP_START_SESSION_RESPONSE:
             return (True, f"session started (opcode={payload[0]}, seq={seq})")
-        op = payload[0] if payload else -1
-        return (False, f"未预期的 SessionConfig opcode={op}")
+        if packet_type == PT_SESSION_CONFIG:
+            op = payload[0] if payload else -1
+            return (False, f"未预期的 SessionConfig opcode={op}")
+        return (False, f"未预期的帧类型 type={packet_type}（期望 SessionConfig START_SESSION_RESPONSE）")
 
     if flow == "watch_nonce":
         cmd = _frame_command(frame)
@@ -608,6 +616,55 @@ def _is_auth_done_cmd(frame):
 # ---------------------------------------------------------------------------
 
 
+def split_for_mtu(frame: bytes, mtu: int) -> list[bytes]:
+    """将整帧按 ATT MTU 切分为写块列表（保持顺序），块大小上限 = mtu - 3。
+
+    协议笔记第 7 节：maxWriteSize = mtu - 3（ATT 写请求头 3 字节），参考实现
+    requestMtu(512) 后按此值切分。此处下限取 20（最小 MTU 23 时的 ATT 单包上限），
+    避免最小 MTU 下超发；单块可容纳时返回 [frame]。
+    """
+    max_write = max(int(mtu) - 3, 20)
+    if len(frame) <= max_write:
+        return [frame]
+    return [frame[i:i + max_write] for i in range(0, len(frame), max_write)]
+
+
+async def _negotiated_mtu(client, char=None) -> int:
+    """读取协商后 ATT MTU（协议笔记第 7 节）；失败回退 23（BLE 最小 MTU）。
+
+    bleak 3.x 无公开的 requestMtu API（BlueZ 连接时由内核自动协商，主动请求 512
+    需宿主机侧配置），读取顺序：
+      1. 特征级 max_write_without_response_size + 3（若为可信值 > 20，BlueZ ≥ 5.62）
+      2. client.mtu_size（BlueZ 后端默认返回 23，需先调后端 _acquire_mtu() 读真实
+         协商值，见 bleak 文档 mtu_size.py 示例的 workaround）
+    仍失败回退 23。
+    """
+    try:
+        max_write = int(getattr(char, "max_write_without_response_size", 0) or 0)
+        if max_write > 20:
+            return max_write + 3
+    except Exception:
+        pass
+    mtu = 23
+    try:
+        mtu = int(client.mtu_size)
+    except Exception:
+        pass
+    if mtu <= 23:
+        backend = getattr(client, "_backend", None)
+        acquire = getattr(backend, "_acquire_mtu", None)
+        if callable(acquire):
+            try:
+                await acquire()
+            except Exception as e:
+                log(f"读取协商 MTU 失败（{type(e).__name__}: {e}），按最小 MTU 23 处理")
+            try:
+                mtu = int(client.mtu_size)
+            except Exception:
+                mtu = 23
+    return mtu if mtu >= 23 else 23
+
+
 async def _pair(client) -> None:
     """尽力配对：bleak 3.x pair() 能力不足时提示手环确认。"""
     try:
@@ -647,16 +704,29 @@ async def authenticate(address: str, authkey_hex: str, device_info: dict | None 
         for uuid, name in ((AUTH_NOTIFY_CHAR, "V2 RX"), (AUTH_WRITE_CHAR, "V2 TX")):
             if svc.get_characteristic(uuid) is None:
                 return {"authenticated": False, "detail": f"缺少特征 {name} {uuid}"}
+        write_char = svc.get_characteristic(AUTH_WRITE_CHAR)
 
         await client.start_notify(AUTH_NOTIFY_CHAR, on_notify)
         log(f"已订阅 {AUTH_NOTIFY_CHAR} 通知")
 
+        # 协商 MTU（协议笔记第 7 节）：读取真实 MTU，发送按 mtu-3 切块
+        negotiated_mtu = await _negotiated_mtu(client, write_char)
+        max_write = max(negotiated_mtu - 3, 20)
+        log(f"ATT MTU = {negotiated_mtu}（maxWriteSize = {max_write}B）")
+
         async def send(frame: bytes) -> None:
-            try:
-                await client.write_gatt_char(AUTH_WRITE_CHAR, frame, response=False)
-            except Exception as e:
-                log(f"写入失败（{type(e).__name__}: {e}）")
-                raise
+            """按协商 MTU 切块逐个写入（保持顺序）；失败抛出带原因的 RuntimeError。"""
+            chunks = split_for_mtu(frame, negotiated_mtu)
+            for chunk in chunks:
+                try:
+                    await client.write_gatt_char(AUTH_WRITE_CHAR, chunk, response=False)
+                except Exception as e:
+                    raise RuntimeError(
+                        f"写入失败（MTU={negotiated_mtu}，帧 {len(frame)}B，块 {len(chunk)}B）: "
+                        f"{type(e).__name__}: {e}") from e
+            if len(chunks) > 1:
+                log(f"帧 {len(frame)}B 按 MTU {negotiated_mtu} 切为 {len(chunks)} 块发送"
+                    f"（每块 ≤ {max_write}B）")
 
         async def recv_until(predicate, label: str):
             """收帧直到 predicate 命中；Data 帧回 ACK，非目标帧跳过。超时返回 None。"""
@@ -671,8 +741,8 @@ async def authenticate(address: str, authkey_hex: str, device_info: dict | None 
                 if frame[0] == PT_DATA:
                     try:
                         await send(build_ack_frame(frame[1]))
-                    except Exception:
-                        return None
+                    except Exception as e:
+                        raise RuntimeError(f"ACK 写入失败（seq={frame[1]}）: {e}") from e
                 result = predicate(frame)
                 if result is not None:
                     return result
@@ -867,6 +937,38 @@ def self_test() -> None:
     done_frame = encode_v2_frame(PT_DATA, 6, bytes([0x01, 0x01]) + done_cmd)
     ok, detail = parse_auth_response(done_frame, "auth_done")
     assert ok, detail
+
+    # ---- split_for_mtu（ATT MTU 切分，协议笔记第 7 节）----
+    assert split_for_mtu(b"\x01\x02", 512) == [b"\x01\x02"], "小于 maxWriteSize 不切分"
+    assert split_for_mtu(b"a" * 20, 23) == [b"a" * 20], "恰好单块（MTU 23 → 20B）"
+    r30 = bytes(range(30))
+    assert split_for_mtu(r30, 23) == [bytes(range(20)), bytes(range(20, 30))], "30B 帧按 MTU 23 切 20+10"
+    assert b"".join(split_for_mtu(r30, 23)) == r30, "切分块拼接应还原原帧"
+    r46 = bytes(range(46))
+    assert split_for_mtu(r46, 26) == [bytes(range(23)), bytes(range(23, 46))], "46B 帧按 MTU 26 切 23+23"
+    assert b"".join(split_for_mtu(r46, 26)) == r46
+    assert split_for_mtu(r30, 512) == [r30], "MTU 512 时 30B 帧单块"
+    for bad_mtu in (0, 5, 23):
+        assert all(len(c) <= 23 for c in split_for_mtu(r30, bad_mtu)), f"异常 MTU {bad_mtu} 下限 20"
+        assert b"".join(split_for_mtu(r30, bad_mtu)) == r30
+    # 真实握手帧在最小 MTU 下的切分（START_SESSION_REQUEST 30B / PhoneNonce 37B / AuthStep3 81B）
+    real_frames = [frames[0], frames[2], frames[4]]
+    flow_chunks = [split_for_mtu(f, 23) for f in real_frames]
+    assert [b"".join(c) for c in flow_chunks] == real_frames, "真实握手帧切分还原"
+    assert all(all(len(c) <= 20 for c in cs) for cs in flow_chunks), "MTU 23 时每块 ≤ 20B"
+    assert all(len(cs) > 1 for cs in flow_chunks), "30/37/81B 帧在 MTU 23 下均需切分"
+
+    # ---- build_protobuf_frame encrypt=True 缺 key / parse_auth_response 帧类型区分 ----
+    try:
+        build_protobuf_frame(1, b"\x08\x01", encrypt=True)
+        raise AssertionError("encrypt=True 缺 key 应抛 ValueError")
+    except ValueError:
+        pass
+    ok, detail = parse_auth_response(encode_v2_frame(PT_DATA, 1, bytes([0x01, 0x01])), "session_response")
+    assert not ok and "帧类型" in detail, f"非 SessionConfig 帧应报告帧类型: {detail}"
+    ok, detail = parse_auth_response(
+        encode_v2_frame(PT_SESSION_CONFIG, 0, bytes([0x99])), "session_response")
+    assert not ok and "SessionConfig opcode" in detail, f"SessionConfig 非预期 opcode 应保留原消息: {detail}"
 
     # ---- authkey 解析 ----
     assert parse_authkey("ab" * 16) == bytes.fromhex("ab" * 16)
