@@ -42,7 +42,6 @@ async def scan_devices(timeout: float = 10.0):
 
 async def dump_gatt(address: str):
     async with BleakClient(address) as client:
-        await client.get_services()
         return {"device": address, "services": services_to_json(client.services)}
 
 
