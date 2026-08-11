@@ -2,11 +2,13 @@
 
 > 本文件是 POC 阶段的核心产出。所有协议值必须来自真机验证或明确标注来源的参考实现，禁止臆造。
 >
-> **标注约定**：标有 `待真机确认` 的值来自参考实现（第 1 节的 Gadgetbridge / Kodo，基于 Band 9 / Band 9 Active），尚未经 Band 10 Pro 真机验证。真机验证后应移除此标注并改为实测值。
+> **标注约定**：
+> - `待真机确认`：来自参考实现（第 1 节的 Gadgetbridge / Kodo，基于 Band 9 / Band 9 Active），尚未经 Band 10 Pro 真机验证。
+> - `真机确认`：已在 Band 10 Pro 真机（2C:0D:CF:73:D9:95）验证。当前验证范围：GATT 服务/特征枚举（2026-08-11，第 3 节）；协议语义（认证握手、表盘推送）待 Task 7/9 验证。
 
 ## 1. 参考实现来源
 
-获取日期：2026-08-11。参考设备型号：Xiaomi Smart Band 9 / Band 9 Active（与 Band 10 Pro 同属小米手环系，协议版本 V2，预计高度相似但**待真机确认**）。
+获取日期：2026-08-11。参考设备型号：Xiaomi Smart Band 9 / Band 9 Active（与 Band 10 Pro 同属小米手环系，协议版本 V2）。2026-08-11 真机 GATT 枚举已确认 Band 10 Pro 的 fe95 服务仅含 V2 特征（5e/5f），与参考实现一致；V1 特征（51/52/53/55）未出现（详见第 3 节）。
 
 | 项目 | 仓库 | 关键文件 | 许可 | 说明 |
 |---|---|---|---|---|
@@ -16,25 +18,60 @@
 > 注意：AGPL-3.0 许可的参考实现代码不可直接复制进本项目；仅作协议参考。
 
 ## 2. 设备信息（真机）
-- 固件版本：
-- 表盘分辨率：
+
+| 项目 | 值 |
+|---|---|
+| 型号 | Xiaomi Smart Band 10 Pro |
+| 广播名 | Xiaomi Smart Band 10 Pro D995（D995 为广播名内型号标识） |
+| 蓝牙地址 | 2C:0D:CF:73:D9:95 |
+| 固件版本 | 待补充（可从 Device Information 服务 180a 读取，后续补充） |
+| 表盘分辨率 | 待补充（以真机规格为准） |
 
 ## 3. GATT 服务枚举结果（真机，scan.py 产出）
 
-下表 UUID 来自参考实现（Kodo `XiaomiUuids.kt`），供 scan.py 枚举时对照；真机枚举结果待 POC 验证。服务/特征归属（V1 vs V2）亦待真机确认。
+下表为 2026-08-11 真机（Band 10 Pro，2C:0D:CF:73:D9:95）GATT 枚举结果（scan.py 产出，原始数据见 `.superpowers/sdd/2026-08-11-watchface-installer/task5-gatt-enum.json`）。“疑似用途”列对照参考实现（Kodo `XiaomiUuids.kt` / Gadgetbridge）标注。
 
 | Service UUID | Characteristic UUID | Properties | 疑似用途（对照参考实现） |
 |---|---|---|---|
-| `0000fe95-0000-1000-8000-00805f9b34fb`（SERVICE_V2） | `0000005e-0000-1000-8000-00805f9b34fb`（V2 RX） | notify | V2 通道接收（读方向），待真机确认 |
-| 同上 | `0000005f-0000-1000-8000-00805f9b34fb`（V2 TX） | write | V2 通道发送（写方向），待真机确认 |
-| 同上 | `00002902-0000-1000-8000-00805f9b34fb`（CCC） | — | 特征配置描述符（enable notification），待真机确认 |
-| `0000fe95-0000-1000-8000-00805f9b34fb`（V1 同 service） | `00000051-0000-1000-8000-00805f9b34fb`（COMMAND_READ）、`00000052-0000-1000-8000-00805f9b34fb`（COMMAND_WRITE）、`00000053-0000-1000-8000-00805f9b34fb`（ACTIVITY_DATA）、`00000055-0000-1000-8000-00805f9b34fb`（DATA_UPLOAD） | — | Band 8 时代的 V1 特征；V2 使用 5e/5f，待真机确认 |
+| `00001800-0000-1000-8000-00805f9b34fb`（GAP，标准） | `00002a00-0000-1000-8000-00805f9b34fb` | read | 标准 GAP：Device Name |
+| 同上 | `00002a01-0000-1000-8000-00805f9b34fb` | read | 标准 GAP：Appearance |
+| 同上 | `00002a04-0000-1000-8000-00805f9b34fb` | read | 标准 GAP：Peripheral Preferred Connection Parameters |
+| 同上 | `00002aa6-0000-1000-8000-00805f9b34fb` | read | 标准 GAP：Central Address Resolution |
+| `00001801-0000-1000-8000-00805f9b34fb`（GATT，标准） | `00002a05-0000-1000-8000-00805f9b34fb` | indicate | 标准 GATT：Service Changed |
+| 同上 | `00002b29-0000-1000-8000-00805f9b34fb` | read, write | 标准 GATT：Client Supported Features |
+| 同上 | `00002b3a-0000-1000-8000-00805f9b34fb` | read | 标准 GATT：Database Hash |
+| `0000fe95-0000-1000-8000-00805f9b34fb`（Xiaomi 私有） | `00000050-0000-1000-8000-00805f9b34fb` | read | 读取特征；参考实现未涉及，用途待确认 |
+| 同上 | `0000005e-0000-1000-8000-00805f9b34fb`（V2 RX） | write-without-response, notify | V2 通道接收（读方向）——**真机确认**，与参考实现 V2 RX 一致 |
+| 同上 | `0000005f-0000-1000-8000-00805f9b34fb`（V2 TX） | write-without-response, notify | V2 通道发送（写方向）——**真机确认**，与参考实现 V2 TX 一致 |
+| `0000fdab-0000-1000-8000-00805f9b34fb`（自定义） | `00000001-0000-1000-8000-00805f9b34fb` | read | 参考实现未涉及，用途未知 |
+| 同上 | `00000002-0000-1000-8000-00805f9b34fb` | write-without-response, notify | 参考实现未涉及，用途未知 |
+| 同上 | `00000003-0000-1000-8000-00805f9b34fb` | write-without-response, notify | 参考实现未涉及，用途未知 |
+| 同上 | `00000004-0000-1000-8000-00805f9b34fb` | read, notify | 参考实现未涉及，用途未知 |
+| `0000180f-0000-1000-8000-00805f9b34fb`（Battery，标准） | `00002a19-0000-1000-8000-00805f9b34fb` | read, notify | 标准：Battery Level |
+| `00001812-0000-1000-8000-00805f9b34fb`（HID，标准） | `00002a4a-0000-1000-8000-00805f9b34fb` | read | 标准 HID：HID Information |
+| 同上 | `00002a4c-0000-1000-8000-00805f9b34fb` | read | 标准 HID：HID Control Point |
+| `0000180a-0000-1000-8000-00805f9b34fb`（Device Information，标准） | `00002a50-0000-1000-8000-00805f9b34fb` | read | 标准：PnP ID（固件版本/设备信息读取入口） |
+| `00003802-0000-1000-8000-00805f9b34fb`（自定义） | `00004a02-0000-1000-8000-00805f9b34fb` | read, write, notify | 参考实现未涉及，用途未知 |
+| `cc353442-be58-4ea2-876e-11d8d6976366`（自定义） | `c551c36a-0377-4a29-9657-74ffb655a188` | read, write, notify | 参考实现未涉及，用途未知 |
+| `0000180d-0000-1000-8000-00805f9b34fb`（Heart Rate，标准） | `00002a37-0000-1000-8000-00805f9b34fb` | notify | 标准：Heart Rate Measurement |
+| `0000fd2d-0000-1000-8000-00805f9b34fb`（自定义） | `0000cf07-0000-0000-0000-000000000000` | write-without-response, notify | 参考实现未涉及，用途未知 |
+| 同上 | `0000cf08-0000-0000-0000-000000000000` | write-without-response, notify | 参考实现未涉及，用途未知 |
+| `1b7e8251-2877-41c3-b46e-cf057c562023`（自定义） | `8ac32d3f-5cb9-4d44-bec2-ee689169f626` | write-without-response, notify | 参考实现未涉及，用途未知 |
+
+**与参考实现的对照结论**：
+
+- **协议匹配**：fe95 服务含 `0000005e`（V2 RX）与 `0000005f`（V2 TX），属性均为 write-without-response + notify——与参考实现 V2 RX/TX 完全一致，**真机确认**。
+- **差异**：V1 特征 `51/52/53/55`（COMMAND_READ / COMMAND_WRITE / ACTIVITY_DATA / DATA_UPLOAD）在真机上**未出现**——fe95 下仅 `50/5e/5f`。Band 10 Pro 走 V2 协议，无 V1 遗留特征。
+- `00002902`（CCC）是特征配置描述符而非特征：scan.py 不枚举描述符，故未列入表；5e/5f 带 notify 属性意味着对应 CCC 描述符存在（enable notification 时写入）。
+- 其余自定义服务（fdab / 3802 / cc353442 / fd2d / 1b7e8251）参考实现未涉及、用途未知，如需分析需逆向（超出当前 POC 范围）。
+
+**操作经验（2026-08-11 真机）**：服务发现（GATT 枚举）前**必须先完成 BLE 配对**——NoInputNoOutput 配对代理配对后需在手环屏幕确认；未配对时 GATT 枚举结果为空（无任何服务）。此外设备需先从手机 App 解绑/断开（或关闭手机蓝牙），否则手环可能不与 POC 建立连接。
 
 ## 4. authkey 认证
 
 - authkey 长度（hex 字符数）：32（16 字节）；"0x" 前缀可接受，待真机确认
-- 认证 service UUID：`0000fe95-0000-1000-8000-00805f9b34fb`，待真机确认
-- 认证 characteristic UUID（写/读/通知）：V2 TX `...5f`（写）/ V2 RX `...5e`（通知），待真机确认
+- 认证 service UUID：`0000fe95-0000-1000-8000-00805f9b34fb`，**真机确认**（服务存在）
+- 认证 characteristic UUID：V2 TX `...5f`（write-without-response）/ V2 RX `...5e`（notify），**真机确认**（两特征均带 write-without-response + notify 属性）
 - 握手流程（步骤序列 + 每步帧格式）：
 
 **V2 帧格式**（`XiaomiSppPacketV2.kt`，小端，待真机确认）：
@@ -72,8 +109,8 @@
 
 ## 5. 表盘推送
 
-- 推送 service UUID：`0000fe95-...`（V2），待真机确认
-- 推送 characteristic UUID：命令走 V2 TX `...5f`；数据上传走 DATA 明文通道，待真机确认
+- 推送 service UUID：`0000fe95-...`（V2），**真机确认**（服务存在）
+- 推送 characteristic UUID：命令走 V2 TX `...5f`——**真机确认**（特征存在，write-without-response）；数据上传 DATA 明文通道行为待 Task 8/9 验证
 - 分块大小：`chunkSize` 由设备在 uploadAck 中给出（无则默认 2048）；每块 partSize = chunkSize - 4（至少 64）；ATT 层实际发送再按 maxWriteSize = mtu-3 切分。待真机确认
 - 帧格式：见第 4 节 V2 帧格式（头部/序号/数据/校验）
 
