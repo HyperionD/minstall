@@ -107,6 +107,25 @@
 
 之后 PROTOBUF 通道命令 encrypt=true（opCode=ENCRYPTED），V2 加密。
 
+### 4.1 真机验证中间状态（2026-08-11，Task 7 进行中）
+
+**已完成**：
+- 配对流程验证通过：注册 NoInputNoOutput agent（dbus，`_register_noinput_agent`）→ `connect` 后 BlueZ **自动完成配对**（Paired=True, ServicesResolved=True）→ 服务发现正常。多次复现。
+- 配对后服务发现正常（fe95/5e/5f 可见，一次枚举到完整 12 服务/24 特征）。
+- dbus 会话内 ATT 通道可用：read 2a00 成功（验证 GattCharacteristic1.ReadValue 可用）。
+- `auth.py` 已实现 dbus 配对路径：`_register_noinput_agent`（注册+设为默认 agent）+ `_dbus_pair`（connect→pair→断开，bleak 复用配对状态）。
+
+**卡点（未解决）**：
+- `Bonded=False`：配对不持久化（无完整 bonding）。connect 自动配对为临时配对；`pair()` 报 "Already Paired" 无法触发完整 bonding；手环端曾显示"配对失败"。
+- **手环不响应认证帧**：写入 START_SESSION_REQUEST（27B 与 16B 两种帧）后 RX 无任何通知；写操作本身成功。疑似：① 未加密连接（Bonded=False）下手环忽略命令；② ATT MTU 仍为 23，27B 帧可能未完整送达；③ 帧 TLV 参数需调整。
+- **bleak 连接后 ATT 读写报 "Not connected"**（BlueZ 后端连接状态与 bleak 报告不一致）；dbus 会话内读写正常 → **认证握手应改用纯 dbus 读写**（当前 auth.py 仍走 bleak，需改）。
+- BlueZ 5.82 + Intel 9560 环境连接不稳定：设备/服务对象时有时无（`br-connection-create-socket` 错误偶发）。
+
+**下一步（明天继续）优先级**：
+1. auth.py 认证传输改为纯 dbus（枚举特征→StartNotify(5e)→WriteValue(5f)），在**同一 dbus 会话**完成握手
+2. 若仍无响应：抓包（btmon，需 sudo）确认帧是否送达；检查 MTU 协商（读 5e/5f 属性或 exchange）；排查 bonding（尝试 unpair 后重新 pair，或 bluetoothctl/桌面工具触发完整 bonding）
+3. 考虑换 Android 手机验证（Android 系统配对/加密由系统处理，可能更顺）
+
 ## 5. 表盘推送
 
 - 推送 service UUID：`0000fe95-...`（V2），**真机确认**（服务存在）

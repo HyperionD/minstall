@@ -665,14 +665,117 @@ async def _negotiated_mtu(client, char=None) -> int:
     return mtu if mtu >= 23 else 23
 
 
+async def _register_noinput_agent() -> None:
+    """Linux: 注册 NoInputNoOutput agent（Just Works 配对必需，真机验证结论）。
+    非 Linux / dbus 不可用时静默跳过（回退 bleak pair()）。"""
+    if sys.platform != "linux":
+        return
+    try:
+        from dbus_next.aio import MessageBus
+        from dbus_next import BusType
+        from dbus_next.service import ServiceInterface, method
+    except ImportError:
+        log("未安装 dbus-next（pip install dbus-next）——配对可能失败，可手动执行 bluetoothctl 'agent NoInputNoOutput'")
+        return
+
+    AGENT_PATH = "/com/minstall/agent"
+
+    class _PairAgent(ServiceInterface):
+        def __init__(self):
+            super().__init__("org.bluez.Agent1")
+
+        @method()
+        def Release(self):
+            pass
+
+        @method()
+        def Cancel(self):
+            pass
+
+        @method()
+        def RequestPinCode(self, device: 's') -> 's':
+            return "0000"
+
+        @method()
+        def RequestPasskey(self, device: 's') -> 'u':
+            return 0
+
+        @method()
+        def RequestConfirmation(self, device: 's', passkey: 'u'):
+            return None
+
+        @method()
+        def RequestAuthorization(self, device: 's'):
+            return None
+
+        @method()
+        def AuthorizeService(self, device: 's', uuid: 's'):
+            return None
+
+    try:
+        bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+        bus.export(AGENT_PATH, _PairAgent())
+        root_node = await bus.introspect("org.bluez", "/org/bluez")
+        am = bus.get_proxy_object("org.bluez", "/org/bluez", root_node)
+        am_iface = am.get_interface("org.bluez.AgentManager1")
+        await am_iface.call_register_agent(AGENT_PATH, "NoInputNoOutput")
+        try:
+            await am_iface.call_request_default_agent(AGENT_PATH)
+            log("已注册 NoInputNoOutput 配对 agent 并设为默认（Just Works，绕开桌面授权弹窗）")
+        except Exception as e:
+            log(f"设置默认 agent 失败（{type(e).__name__}: {e}），仍使用已注册 agent")
+        # 保持 bus 连接；函数返回后由调用方持有引用
+        return bus
+    except Exception as e:
+        log(f"注册 NoInputNoOutput agent 失败（{type(e).__name__}: {e}），可手动执行 bluetoothctl 'agent NoInputNoOutput'")
+        return None
+
+
+async def _dbus_pair(bus, address: str) -> bool:
+    """Linux: 用 dbus 完成 connect + pair（真机验证结论：必须经 dbus 注册 NoInputNoOutput
+    agent 配对，配对状态保持后 bleak 才能发现服务）。返回配对是否成功。"""
+    if bus is None:
+        return False
+    dev_path = "/org/bluez/hci0/dev_" + address.upper().replace(":", "_")
+    try:
+        dev_node = await bus.introspect("org.bluez", dev_path)
+        dev = bus.get_proxy_object("org.bluez", dev_path, dev_node)
+        dev_iface = dev.get_interface("org.bluez.Device1")
+        try:
+            await dev_iface.call_connect()
+        except Exception as e:
+            log(f"dbus connect: {type(e).__name__}: {e}")
+        await asyncio.sleep(1.5)
+        try:
+            await dev_iface.call_pair()
+        except Exception as e:
+            # "Already Paired" / "Authentication Canceled" 时仍可能已配对
+            log(f"dbus pair: {type(e).__name__}: {e}")
+        await asyncio.sleep(2.0)
+        props = dev.get_interface("org.freedesktop.DBus.Properties")
+        try:
+            paired = (await props.call_get("org.bluez.Device1", "Paired")).value
+        except Exception:
+            paired = False
+        try:
+            await dev_iface.call_disconnect()
+        except Exception:
+            pass
+        log(f"dbus 配对结果: Paired={paired}（断开 dbus，稍后由 bleak 连接复用配对状态）")
+        return bool(paired)
+    except Exception as e:
+        log(f"dbus 配对流程失败（{type(e).__name__}: {e}）")
+        return False
+
+
 async def _pair(client) -> None:
-    """尽力配对：bleak 3.x pair() 能力不足时提示手环确认。"""
+    """尽力配对：bleak 3.x pair() 能力不足时提示手环确认。（Linux 上由 _dbus_pair 完成，此函数为回退）"""
     try:
         await asyncio.wait_for(client.pair(), timeout=10)
         log("已发起配对——如手环弹出确认请点击确认")
     except Exception as e:
         log(f"pair() 未成功（{type(e).__name__}: {e}）")
-        log("提示：若手环未配对，请先在 bluetoothctl 中执行 'agent NoInputNoOutput' 后重试，"
+        log("提示：若手环未配对，请先执行 bluetoothctl 'agent NoInputNoOutput' 后重试，"
             "并确认手环已在手机 App 解绑/关闭手机蓝牙")
 
 
@@ -687,6 +790,10 @@ async def authenticate(address: str, authkey_hex: str, device_info: dict | None 
 
     from bleak import BleakClient  # 延迟导入，自检不依赖 bleak
 
+    # 配对前置（Linux）：注册 NoInputNoOutput agent → dbus connect+pair → 断开 dbus
+    agent_bus = await _register_noinput_agent()
+    await _dbus_pair(agent_bus, address)
+
     queue = asyncio.Queue()
     accumulator = V2Accumulator()
 
@@ -697,10 +804,20 @@ async def authenticate(address: str, authkey_hex: str, device_info: dict | None 
     async with BleakClient(address, timeout=timeout) as client:
         await _pair(client)
 
+        # 配对后轮询等待服务发现（真机经验：需手环确认后服务才可解析，最长 20s）
+        svc = None
+        for _ in range(20):
+            try:
+                svc = client.services.get_service(AUTH_SERVICE_UUID)
+                if svc is not None:
+                    break
+            except Exception:
+                pass
+            await asyncio.sleep(1.0)
+
         # 校验 V2 service / 特征（需先配对成功，见 protocol-notes 第 3 节操作经验）
-        svc = client.services.get_service(AUTH_SERVICE_UUID)
         if svc is None:
-            return {"authenticated": False, "detail": f"未发现 V2 service {AUTH_SERVICE_UUID}（可能未配对）"}
+            return {"authenticated": False, "detail": f"未发现 V2 service {AUTH_SERVICE_UUID}（可能未配对或手环未确认）"}
         for uuid, name in ((AUTH_NOTIFY_CHAR, "V2 RX"), (AUTH_WRITE_CHAR, "V2 TX")):
             if svc.get_characteristic(uuid) is None:
                 return {"authenticated": False, "detail": f"缺少特征 {name} {uuid}"}
