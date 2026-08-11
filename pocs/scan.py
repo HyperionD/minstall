@@ -26,7 +26,7 @@ def services_to_json(services):
         result[str(service.uuid)] = [
             {
                 "uuid": str(c.uuid),
-                "properties": sorted(p.name for p in c.properties),
+                "properties": sorted(c.properties),
             }
             for c in service.characteristics
         ]
@@ -62,6 +62,39 @@ async def main():
         filtered = filter_relevant([fake, type("F", (), {"name": "iPhone", "address": "X", "rssi": 0})()])
         assert filtered[0]["name"] == "Xiaomi Band 10 Pro", filtered
         assert len(filtered) == 1, filtered
+
+        # services_to_json：properties 为字符串列表（bleak 3.0.2 源码核实），须可排序序列化
+        class FakeChar:
+            def __init__(self, uuid, properties):
+                self.uuid = uuid
+                self.properties = properties
+
+        class FakeService:
+            def __init__(self, uuid, chars):
+                self.uuid = uuid
+                self.characteristics = chars
+
+        fake_services = [
+            FakeService(
+                "0000180f-0000-1000-8000-00805f9b34fb",
+                [
+                    FakeChar("00002a19-0000-1000-8000-00805f9b34fb", ["read", "notify"]),
+                    FakeChar("00002a6e-0000-1000-8000-00805f9b34fb", ["write", "write-without-response", "read"]),
+                ],
+            ),
+            FakeService(
+                "0000fe95-0000-1000-8000-00805f9b34fb",
+                [FakeChar("00000001-0000-1000-8000-00805f9b34fb", ["write", "read"])],
+            ),
+        ]
+        dumped = services_to_json(fake_services)
+        svc0 = dumped["0000180f-0000-1000-8000-00805f9b34fb"]
+        assert len(svc0) == 2, dumped
+        assert set(svc0[0]) == {"uuid", "properties"}, dumped
+        assert svc0[0]["uuid"] == "00002a19-0000-1000-8000-00805f9b34fb", dumped
+        assert svc0[0]["properties"] == ["notify", "read"], dumped
+        assert svc0[1]["properties"] == ["read", "write", "write-without-response"], dumped
+        assert dumped["0000fe95-0000-1000-8000-00805f9b34fb"][0]["properties"] == ["read", "write"], dumped
         print("self-test OK")
         return
     # 交互模式：扫描 → 列出 → 选号枚举 GATT
