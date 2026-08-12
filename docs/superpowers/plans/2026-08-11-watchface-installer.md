@@ -1102,8 +1102,8 @@ git commit -m "feat(ui): add three-screen install wizard"
 - [ ] 5. 安装损坏文件 → 前置校验拦截
 - [ ] 6. 推送中途断开蓝牙 → 错误提示 + 可重试
 
-> ⚠️ 待办：`ble::connection::Manager::connect` 目前直接 `rfcomm::Stream::connect`（内核 socket），
-> 未实现 BLE 配对 agent（POC 用 DisplayYesNo agent）。真机验证时若连接失败需补配对逻辑。
+> 已就绪：手环 2C:0D:CF:73:D9:95 已配对（Paired=yes，Connected=no）；测试 bin `~/下载/forms-watchface/伊布.face`（2492348B，id=167210067，Task 9 同款）；
+> 配对 agent 已集成（DisplayYesNo，提交 35ac542）。待用户提供有效 authkey（32 hex）后逐项验证。
 
 - [x] **Step 2: 更新 README 使用说明**
 
