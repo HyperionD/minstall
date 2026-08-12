@@ -52,7 +52,7 @@ pub async fn install_watchface(
     bin_path: String,
 ) -> Result<(), String> {
     let mut mgr = state.inner().lock().await;
-    let session = mgr.session().map_err(|e| e.to_string())?.clone();
+    let session = mgr.session().map_err(|e| e.to_string())?;
     watchface::push(&mut mgr, &session, &bin_path, |sent, total| {
         let _ = app.emit(
             "install:progress",
