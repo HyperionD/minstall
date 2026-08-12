@@ -24,7 +24,8 @@
 | 型号 | Xiaomi Smart Band 10 Pro |
 | 广播名 | Xiaomi Smart Band 10 Pro D995（D995 为广播名内型号标识） |
 | 蓝牙地址 | 2C:0D:CF:73:D9:95 |
-| 固件版本 | 待补充（可从 Device Information 服务 180a 读取，后续补充） |
+| 固件版本 | 3.101.036（2026-08-12 加密通道读取 DeviceInfo 真机确认） |
+| 设备类型 | M2551B1（DeviceInfo.deviceType 真机确认） |
 | 表盘分辨率 | 待补充（以真机规格为准） |
 
 ## 3. GATT 服务枚举结果（真机，scan.py 产出）
@@ -128,29 +129,38 @@
 
 ## 5. 表盘推送
 
+**真机验证通过（2026-08-12，Task 9）**：Band 10 Pro（M2551B1，固件 3.101.036）上完整跑通表盘安装（伊布.face，2492348 字节），手环返回 **InstallResult code=3（INSTALL_USED，已安装）**，表盘出现在手环列表。
+
+**注意：Band 10 Pro 安装流程必须用 astrobox 的 WearPacket 协议（非 Gadgetbridge 的 Command 协议）**，见下方 WearPacket 流程。
+
+**WearPacket 表盘安装流程（真机验证，2026-08-12）**：
+1. `WearPacket{type=WATCH_FACE(4), id=PREPARE_INSTALL_WATCH_FACE(4), WatchFace{prepare_info=6{id, size, version_code=65536}}}`（加密通道）
+   → 手环回 `WearPacket{type=4, id=4, WatchFace{prepare_status=5}}`（0=READY）
+2. `WearPacket{type=MASS(22), id=PREPARE(0), Mass{prepare_request=1{data_type=16, data_id=md5, data_length}}}`（加密通道）
+   → 手环回 `WearPacket{type=22, id=0, Mass{prepare_response=2{prepare_status=2, expected_slice_length=5}}}`（本次 12288）
+3. MASS 分片上传（DATA 通道明文）：`L2[channel=2(Mass)][op=1(Write)][total u16][cur u16][fragment]`，fragment = slice_length - 6
+   - MassPacket 负载：`[comp 1B=0x00][type 1B=16][md5 16B][size u32 LE][bytes] + crc32 u32 LE`
+   - **批量窗口：真机验证 BATCH=2 稳定，>2 手环断连**（手环 SessionConfig TX_WIN=3）
+4. 上传完成等手环推送 `WearPacket{type=WATCH_FACE(4), id=REPORT_INSTALL_RESULT(5), WatchFace{install_result=7{id, code}}}`：code 2=SUCCESS, 3=INSTALL_USED（已安装，成功）
+5. 可用 `WearPacket{type=WATCH_FACE(4), id=GET_INSTALLED_LIST(0)}` 查询列表确认
+
+**WearPacket 字段编号（关键，astrobox wear.proto）**：
+- WearPacket{type=1, id=2, payload oneof}；payload 字段：Account=3, System=4, WatchFace=6, ... **Mass=24**（不是 7！）
+- WatchFace payload：prepare_status=5, prepare_info=6, install_result=7, prepare_reply=9
+- Mass payload：prepare_request=1, prepare_response=2
+- PrepareResponse{data_id=1, prepare_status=2, expected_slice_length=5}
+- PrepareStatus: READY=0, ...；InstallResult.Code: VERIFY_FAILED=0, INSTALL_FAILED=1, INSTALL_SUCCESS=2, INSTALL_USED=3
+
+**存储查询（真机验证，2026-08-12）**：`WearPacket{type=SYSTEM(2), id=GET_STORAGE_INFO(62)}`（加密通道，payload=None）
+→ 手环回 `WearPacket{type=2, id=62, System{storage_info=44{used=1, total=2}}}`。
+真机值：used=12.62MB / total=259.38MB（M2551B1，含系统与表盘）。可用于安装前检查剩余空间。
+
 - 推送 service UUID：`0000fe95-...`（V2），**真机确认**（服务存在）
-- 推送 characteristic UUID：命令走 V2 TX `...5f`——**真机确认**（特征存在，write-without-response）；数据上传 DATA 明文通道行为待 Task 8/9 验证
-- 分块大小：`chunkSize` 由设备在 uploadAck 中给出（无则默认 2048）；每块 partSize = chunkSize - 4（至少 64）；ATT 层实际发送再按 maxWriteSize = mtu-3 切分。待真机确认
+- 推送 characteristic UUID：命令走 V2 TX `...5f`——**真机确认**（特征存在）；数据上传 DATA 明文通道行为已随 SPP 验证（Task 9）
+- 分块大小：`expected_slice_length` 由设备在 Mass prepare_response 中给出（本次真机返回 **12288**）；fragment = slice_length - 6（L2 头 2B + total/cur 4B）。**真机确认**
 - 帧格式：见第 4 节 V2 帧格式（头部/序号/数据/校验）
 
-**安装流程**（XiaomiWatchfaceService / HybridWatchface，待真机确认）：
-1. 发 `Command{type=4, subtype=4(CMD_WATCHFACE_INSTALL), Watchface.watchfaceInstallStart{id, size}}`（加密）
-2. 收 `Command{type=4, subtype=4, Watchface.installStatus}`；installStatus==0 才继续（2=已安装）
-3. 数据上传（DATA 明文通道，见下）
-4. 发 `Command{type=4, subtype=1(CMD_WATCHFACE_SET), Watchface.watchfaceId=id}` 激活
-
-**数据上传**（MiBand9DataUploader / XiaomiDataUploadService，待真机确认）：
-1. 发 `Command{type=22, subtype=0, DataUpload.dataUploadRequest{type=16(TYPE_WATCHFACE), md5sum=MD5(bytes), size}}`（加密）
-2. 收 `Command{type=22, subtype=0, DataUpload.dataUploadAck{unknown2（须为0）, resumePosition, chunkSize（无则默认2048）}}`
-3. 构造带帧数据：
-   ```
-   framed = [0x00][type u8][md5 16B][size u32 LE][bytes]
-   withCrc = framed + [crc32 u32 LE of framed]   # java.util.zip.CRC32
-   ```
-   分块：partSize = (chunkSize - 4)（至少 64）；每块 = [totalParts u16 LE][current u16 LE][data]
-   通过 DATA 通道（明文）逐块发送，块大小上限 maxWriteSize = mtu-3
-
-- 应答格式：`Command{type=22, subtype=0, DataUpload.dataUploadAck}`，见上；上传完成由安装流程的 installStatus 应答确认。待真机确认
+> 注：Gadgetbridge/Kodo 的 `Command{type=4/22}` 安装流程（XiaomiWatchfaceService / MiBand9DataUploader）是 Band 9 的 BLE 协议；Band 10 Pro 走 SPP + WearPacket（astrobox 同款），两者 type 编号巧合重叠但消息体不同，勿混用。
 
 ## 6. Bin 文件格式（表盘包解析）
 
