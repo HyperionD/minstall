@@ -1,49 +1,184 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { listen } from "@tauri-apps/api/event";
+
+type Device = { name: string; address: string; rssi: number };
+type Progress = { sent: number; total: number };
+
+type Screen = "connect" | "install" | "result";
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  const [screen, setScreen] = useState<Screen>("connect");
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [selected, setSelected] = useState<Device | null>(null);
+  const [authkey, setAuthkey] = useState("");
+  const [binPath, setBinPath] = useState("");
+  const [progress, setProgress] = useState<Progress>({ sent: 0, total: 0 });
+  const [logs, setLogs] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+  useEffect(() => {
+    const un = listen<Progress>("install:progress", (e) => {
+      setProgress(e.payload);
+      setLogs((prev) => [
+        ...prev,
+        `进度: ${e.payload.sent} / ${e.payload.total} 字节`,
+      ]);
+    });
+    return () => {
+      un.then((f) => f());
+    };
+  }, []);
+
+  const doScan = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      const found = await invoke<Device[]>("scan_devices");
+      setDevices(found);
+      setLogs((prev) => [...prev, `扫描完成，发现 ${found.length} 个相关设备`]);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doConnect = async () => {
+    if (!selected) return;
+    setError(null);
+    setLogs([]);
+    setBusy(true);
+    try {
+      await invoke("connect", { address: selected.address });
+      setLogs((prev) => [...prev, `已连接 ${selected.address}（SPP RFCOMM）`]);
+      await invoke("authenticate", { authkey });
+      setLogs((prev) => [...prev, "认证成功"]);
+      setScreen("install");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doInstall = async () => {
+    setError(null);
+    setLogs([]);
+    setProgress({ sent: 0, total: 0 });
+    setBusy(true);
+    try {
+      await invoke("install_watchface", { binPath });
+      setLogs((prev) => [...prev, "安装完成"]);
+      setScreen("result");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doDisconnect = async () => {
+    setError(null);
+    try {
+      await invoke("disconnect");
+      setSelected(null);
+      setScreen("connect");
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+    <main className="app">
+      <h1>小米手环 10 Pro 表盘安装器</h1>
 
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
+      {screen === "connect" && (
+        <section>
+          <div className="notice">
+            ⚠️ 使用前请断开手机与手环的连接（蓝牙独占）；
+            <br />
+            若手环未绑定/恢复出厂，请先用官方 App 绑定并提取 authkey。
+          </div>
+          <div className="row">
+            <button onClick={doScan} disabled={busy}>
+              {busy ? "扫描中…" : "扫描设备"}
+            </button>
+          </div>
+          <ul className="device-list">
+            {devices.map((d) => (
+              <li key={d.address}>
+                <label>
+                  <input
+                    type="radio"
+                    name="dev"
+                    checked={selected?.address === d.address}
+                    onChange={() => setSelected(d)}
+                  />
+                  {d.name} — {d.address} (rssi {d.rssi})
+                </label>
+              </li>
+            ))}
+          </ul>
+          <input
+            placeholder="authkey（hex，32 字符 = 16 字节）"
+            value={authkey}
+            onChange={(e) => setAuthkey(e.target.value)}
+          />
+          <div className="row">
+            <button
+              disabled={!selected || authkey.length === 0 || busy}
+              onClick={doConnect}
+            >
+              连接并认证
+            </button>
+          </div>
+        </section>
+      )}
 
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
+      {screen === "install" && (
+        <section>
+          <input
+            placeholder=".bin / .face 表盘文件路径"
+            value={binPath}
+            onChange={(e) => setBinPath(e.target.value)}
+          />
+          <div className="row">
+            <button disabled={!binPath || busy} onClick={doInstall}>
+              {busy ? "安装中…" : "安装"}
+            </button>
+            <button onClick={doDisconnect} disabled={busy}>
+              断开
+            </button>
+          </div>
+          <div className="progress">
+            进度: {progress.sent} / {progress.total} 字节
+            {progress.total > 0 && (
+              <span>
+                {" "}
+                ({Math.round((progress.sent / progress.total) * 100)}%)
+              </span>
+            )}
+          </div>
+          <div className="logs">{logs.join("\n")}</div>
+        </section>
+      )}
+
+      {screen === "result" && (
+        <section>
+          <h2>{error ? "安装失败" : "安装完成"}</h2>
+          {error && <div className="error">{error}</div>}
+          {!error && (
+            <div className="success">表盘已推送，请在手环上查看表盘列表。</div>
+          )}
+          <div className="row">
+            <button onClick={() => setScreen("connect")}>返回</button>
+          </div>
+        </section>
+      )}
+
+      {error && screen !== "result" && <div className="error">{error}</div>}
     </main>
   );
 }

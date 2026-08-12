@@ -963,7 +963,7 @@ git commit -m "feat: add tauri commands and progress events"
 - Consumes: `invoke` 命令与 `listen` 事件（Tauri JS API）
 - Produces: 三屏向导：连接页 / 安装页 / 结果页；调用 `scan_devices`、`connect`、`authenticate`、`install_watchface`，监听 `install:progress`。
 
-- [ ] **Step 1: 写 App.tsx**
+- [x] **Step 1: 写 App.tsx**
 
 ```tsx
 import { useEffect, useState } from "react";
@@ -1062,16 +1062,20 @@ function App() {
 export default App;
 ```
 
-- [ ] **Step 2: 写基础样式 `src/App.css`**
+- [x] **Step 2: 写基础样式 `src/App.css`**
 
 简单垂直布局、`.notice` 醒目黄色警告、`.error` 红色、`.logs` 等宽字体滚动区。无重型 UI 框架。
 
-- [ ] **Step 3: 构建验证**
+> 已实现：三屏（连接/安装/结果）+ `.notice`（黄色警告：断开手机 + 绑定提示）+ `.error`/`.success` + `.logs` 等宽深色滚动区 + 进度百分比 + 断开按钮。authkey placeholder 修正为 32 字符（协议笔记 AUTHKEY_LEN=32，原计划写 64 是错的）。
+
+- [x] **Step 3: 构建验证**
 
 Run: `cd /home/hyperion/projects/minstall && npm run build` 与 `cargo tauri build`（或 `npm run tauri dev` 手动确认三屏流转）
 Expected: 编译通过，界面可按流程流转。
 
-- [ ] **Step 4: 提交**
+> 已执行：`npm run build` 通过（tsc + vite）；`npx tauri build --debug --no-bundle` 产出 `target/debug/minstall`；GUI 启动验证通过。剩余 14 个未使用警告均为有意保留的协议常量（存储查询/列表查询等未来扩展用）。
+
+- [x] **Step 4: 提交**
 
 ```bash
 git add src/

@@ -83,8 +83,8 @@ pub fn build_mass_frames(data: &[u8], slice_length: usize) -> (Vec<Vec<u8>>, usi
         let end = ((i + 1) * fragment_max).min(with_crc.len());
         let fragment = &with_crc[start..end];
         let mut header = Vec::with_capacity(6 + fragment.len());
-        header.push(2); // channel=2 (Mass)
-        header.push(1); // op=1 (Write)
+        header.push(CHANNEL_DATA); // channel=2 (Mass, 明文)
+        header.push(1);            // op=1 (Write)
         header.extend_from_slice(&(total_parts as u16).to_le_bytes());
         header.extend_from_slice(&((i + 1) as u16).to_le_bytes()); // cur 从 1 起
         header.extend_from_slice(fragment);
