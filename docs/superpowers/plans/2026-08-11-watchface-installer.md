@@ -608,19 +608,15 @@ git commit -m "feat: scaffold tauri app with react-ts template"
 - Consumes: `docs/protocol-notes.md` 第 4/5 节（POC 验证后的最终值）
 - Produces: `consts.rs` 导出 `AUTH_SERVICE_UUID: &str`、`AUTH_WRITE_CHAR: &str`、`AUTH_NOTIFY_CHAR: &str`、`PUSH_SERVICE_UUID: &str`、`PUSH_WRITE_CHAR: &str`、`PUSH_NOTIFY_CHAR: &str`、`CHUNK_SIZE: usize`、`AUTHKEY_LEN: usize`；`errors.rs` 导出 `BleError`（thiserror 枚举：`Adapter`, `ScanTimeout`, `ConnectFailed(String)`, `AuthFailed(String)`, `PushFailed { chunk: usize, detail: String }`, `FileError(String)`）。
 
-- [ ] **Step 1: 写 consts.rs（值取自协议笔记）**
+- [x] **Step 1: 写 consts.rs（值取自协议笔记）**
 
 ```rust
 //! 协议常量：唯一来源 docs/protocol-notes.md（POC 真机验证值）。改协议只改本文件。
 
 pub const AUTH_SERVICE_UUID: &str = "0000FEE0-0000-1000-8000-00805F9B34FB"; // 占位：以协议笔记第 4 节为准替换
-pub const AUTH_WRITE_CHAR: &str = "0000FED9-0000-1000-8000-00805F9B34FB";   // 占位：同上
-pub const AUTH_NOTIFY_CHAR: &str = "0000FED8-0000-1000-8000-00805F9B34FB"; // 占位：同上
-pub const PUSH_SERVICE_UUID: &str = "0000FEE0-0000-1000-8000-00805F9B34FB"; // 占位：以协议笔记第 5 节为准替换
-pub const PUSH_WRITE_CHAR: &str = "0000FED9-0000-1000-8000-00805F9B34FB";   // 占位：同上
-pub const PUSH_NOTIFY_CHAR: &str = "0000FED8-0000-1000-8000-00805F9B34FB"; // 占位：同上
-pub const CHUNK_SIZE: usize = 128;   // 占位：以协议笔记第 5 节为准
-pub const AUTHKEY_LEN: usize = 64;   // 占位：以协议笔记第 4 节为准
+```
+
+> **已按协议笔记重写**：原计划的 GATT UUID 常量（AUTH_SERVICE_UUID 等）已被 SPP/WearPacket 常量替代——Band 10 Pro 走 SPP 通道（RFCOMM ch5），无 GATT 特征读写。当前常量：`SPP_SERVICE_UUID`、`RFCOMM_CHANNEL=5`、`V1_HELLO`、V2 帧格式（preamble/packet type/header len）、DATA 通道（PROTOBUF/DATA/ACTIVITY + opCode）、`AUTHKEY_LEN=32`、WearPacket 认证（`AUTH_ID_VERIFY=26`/`AUTH_ID_CONFIRM=27`/`AUTH_ERROR_NO_BOUND=4`）、WearPacket 类型（`WEARPACKET_TYPE_MASS=24` 非 7）、安装流程 id、MASS 分片（`MASS_FRAME_OVERHEAD=6`、`DEFAULT_SLICE_LENGTH=12288`、`MASS_BATCH=2`）、安装结果码。全部有协议笔记来源。
 
 #[cfg(test)]
 mod tests {
@@ -634,7 +630,7 @@ mod tests {
 
 **注意**：上面标"占位"的值必须替换为协议笔记中的真实值 —— 这是**实现时必须完成的动作**，不是可选。替换后运行测试确认。
 
-- [ ] **Step 2: 写 errors.rs**
+- [x] **Step 2: 写 errors.rs**
 
 ```rust
 use thiserror::Error;
@@ -656,16 +652,20 @@ pub enum BleError {
 }
 ```
 
-- [ ] **Step 3: 建 mod.rs**
+- [x] **Step 3: 建 mod.rs**
 
 `ble/mod.rs` 与 `protocol/mod.rs` 各声明子模块；`main.rs` 注册 `mod protocol; mod ble;`。
 
-- [ ] **Step 4: 构建 + 测试**
+> 已执行：模块注册在 `lib.rs`（Tauri 2 模板入口是 lib.rs，main.rs 仅调 `minstall_lib::run()`）。
+
+- [x] **Step 4: 构建 + 测试**
 
 Run: `cd src-tauri && cargo test && cargo build`
 Expected: 测试通过，构建成功。
 
-- [ ] **Step 5: 提交**
+> 已执行：`cargo test` 4 个测试通过（protocol_notes_values_are_non_empty / wearpacket_mass_type_is_24_not_7 / fragment_size_math / v2_header_len_matches_layout）；`cargo build` 成功。未使用警告来自后续 Task 12/13 将消费的常量/错误类型，属预期。
+
+- [x] **Step 5: 提交**
 
 ```bash
 git add src-tauri/src
