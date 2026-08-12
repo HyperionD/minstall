@@ -187,4 +187,36 @@
 
 **对工具设计的含义**：
 - 电脑端 BLE 直连需要手环处于"可配对"状态（解绑/恢复出厂，或手环侧主动进入配对模式）
-- 若手环支持经典蓝牙 SPP 通道（待确认），SPP 可能绕过该限制（SPP 配对独立于 BLE bonding）——当前 Band 10 Pro BR/EDR 扫描未发现 SPP 服务，待进一步验证
+- **手环支持经典蓝牙 SPP 通道（RFCOMM channel 5，已确认，见 4.3 节）**，且 V2 协议实际走 SPP——正式应用应走 SPP 通道（可能绕过 BLE bonding 限制，待手环重开机后验证不解绑场景）
+
+### 4.3 SPP 通道打通 —— V2 协议实际走经典蓝牙（2026-08-12 真机验证）
+
+**重大结论：Band 10 Pro 的 V2 协议走经典蓝牙 SPP 通道（RFCOMM channel 5），不走 BLE 5e/5f！**
+
+#### 发现过程（真机）
+
+1. **SPP 服务确认**：`sdptool browse` 显示手环有 Serial Port 服务（RFCOMM channel 5, v1.02）
+2. **BLE 5e/5f 写帧无响应**：即使 GATT 读写正常（读 2a00 成功）、链路加密（AUTH ENCRYPT）、MTU 517，向 5f 写 V2 帧手环始终静默 —— 通道错误
+3. **SPP 连接成功**：dbus-fast + `negotiate_unix_fd=True` 注册 SPP Profile → ConnectProfile → RFCOMM fd
+4. **V1 Hello 帧是必需的前置**：连接后先发 `badcfe00c00300000100ef`（V1 协议 Version 查询），手环响应 `badcfe00000600010200030131ef`（版本 01.01）确认通道
+5. **V2 认证在 SPP 上正常推进**：
+   - START_SESSION_REQUEST → 收到 START_SESSION_RESPONSE（type=2, opcode=2）
+   - PhoneNonce（明文）→ 手环回 ACK + Data 帧（Command type=1, subtype=26 = CMD_NONCE 开头）
+   - ⚠️ WatchNonce 数据收到 8B 开头 `0801101a1a021804` 后手环关机（待续：需持续累积分片 + 完整等待）
+
+#### 关键技术点
+
+| 项 | 值 | 说明 |
+|---|---|---|
+| SPP UUID | `00001101-0000-1000-8000-00805f9b34fb` | 标准 Serial Port |
+| RFCOMM channel | 5 | 从 SDP 查询获得 |
+| **dbus FD 支持** | `MessageBus(negotiate_unix_fd=True)` | **必须**！否则 bluetoothd 报 "Tried to send message with Unix file descriptors to a client that doesn't support that" |
+| **dbus 库选择** | **dbus-fast**（非 dbus-next） | dbus-next 的 Profile 方法签名 `oha{sv}` 无法正确暴露（UnknownMethod 错误） |
+| V1 Hello 帧 | `badcfe00c00300000100ef` | V1 版本协商：channel=0(Version), needsResponse, OPCODE_READ |
+| V1 响应 | `badcfe00000600010200030131ef` | 版本 01.01 → 确认后进入 V2 |
+
+#### 对工具设计的含义（重大修正）
+
+- **正式应用应走 SPP 通道**（不是 BLE GATT！）—— 这解释了为什么 BLE 上认证一直无响应
+- SPP 通道**可能绕过 BLE bonding 限制**（SPP 配对独立于 BLE bonding）—— 4.2 节的"待确认"已变为"很可能可行"：若 SPP 连接无需解绑，电脑端工具也能达到 astrobox 的"不解绑"体验（待手环重新开机后验证）
+- AstroBox 在 Linux 用 bluer（Rust）实现同样的 SPP Profile 连接，与我们验证的 dbus-fast 路径等价

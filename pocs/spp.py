@@ -229,7 +229,7 @@ async def main():
         print(__doc__)
         sys.exit(2)
 
-    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+    bus = await MessageBus(bus_type=BusType.SYSTEM, negotiate_unix_fd=True).connect()
     profile = SppProfile(bus)
 
     cmd = args[0]

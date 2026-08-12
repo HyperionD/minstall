@@ -133,22 +133,33 @@ async def wait_services_resolved(props, timeout=25):
 
 
 async def find_characteristics(bus):
-    """通过 ObjectManager 枚举 fe95 服务下的特征路径。返回 {uuid: path}。"""
+    """通过 ObjectManager 枚举 fe95 服务下的特征路径。
+
+    返回 (char_paths: {uuid: path}, desc_paths: {char_path: [desc_path]})。
+    """
     node = await bus.introspect("org.bluez", "/")
     root = bus.get_proxy_object("org.bluez", "/", node)
     om = root.get_interface("org.freedesktop.DBus.ObjectManager")
     objects = await om.call_get_managed_objects()
 
     char_paths = {}
+    desc_paths = {}
     for path, ifaces in objects.items():
-        if "org.bluez.GattCharacteristic1" not in ifaces:
-            continue
-        chprops = {k: v.value for k, v in ifaces["org.bluez.GattCharacteristic1"].items()}
-        uuid = chprops.get("UUID", "").lower()
-        if uuid in (V2_TX, V2_RX):
-            char_paths[uuid] = path
-            log(f"特征 {uuid} → {path} props={chprops.get('Flags')}")
-    return char_paths
+        if "org.bluez.GattCharacteristic1" in ifaces:
+            chprops = {k: v.value for k, v in ifaces["org.bluez.GattCharacteristic1"].items()}
+            uuid = chprops.get("UUID", "").lower()
+            if uuid in (V2_TX, V2_RX):
+                char_paths[uuid] = path
+                log(f"特征 {uuid} → {path} props={chprops.get('Flags')}")
+        elif "org.bluez.GattDescriptor1" in ifaces:
+            dprops = {k: v.value for k, v in ifaces["org.bluez.GattDescriptor1"].items()}
+            if dprops.get("UUID", "").lower() == CCC:
+                # descriptor 的父路径是特征路径
+                parent = path.rsplit("/", 1)[0]
+                desc_paths.setdefault(parent, []).append(path)
+    for parent, descs in desc_paths.items():
+        log(f"CCCD {parent} → {descs}")
+    return char_paths, desc_paths
 
 
 async def get_char(bus, path):
@@ -156,34 +167,53 @@ async def get_char(bus, path):
     return bus.get_proxy_object("org.bluez", path, node)
 
 
-async def start_notify(bus, rx_path):
-    """写 CCCD=0x0100 启用通知。"""
+async def start_notify(bus, rx_path, desc_paths):
+    """写 CCCD=0x0100 启用通知；无 CCCD 路径时退回 StartNotify；确认 Notifying=True。"""
     node = await bus.introspect("org.bluez", rx_path)
     ch = bus.get_proxy_object("org.bluez", rx_path, node)
     ch_iface = ch.get_interface("org.bluez.GattCharacteristic1")
-    # 找 CCCD descriptor
-    desc_path = rx_path + "/00002902-0000-1000-8000-00805f9b34fb"
+    ch_props = ch.get_interface("org.freedesktop.DBus.Properties")
+
+    descs = desc_paths.get(rx_path, [])
+    if descs:
+        for desc_path in descs:
+            try:
+                dn = await bus.introspect("org.bluez", desc_path)
+                desc = bus.get_proxy_object("org.bluez", desc_path, dn)
+                d_iface = desc.get_interface("org.bluez.GattDescriptor1")
+                await d_iface.call_write_value(bytes([0x01, 0x00]), {})
+                log(f"已写 CCCD=0100 启用通知 ({desc_path})")
+                return True
+            except Exception as e:
+                log(f"CCCD 写入失败（{desc_path}: {type(e).__name__}: {e}）")
+    # 备选：StartNotify（BlueZ 会自己写 CCCD）
     try:
-        dn = await bus.introspect("org.bluez", desc_path)
-        desc = bus.get_proxy_object("org.bluez", desc_path, dn)
-        d_iface = desc.get_interface("org.bluez.GattDescriptor1")
-        await d_iface.call_write_value(bytearray([0x01, 0x00]), {})
-        log(f"已写 CCCD=0100 启用通知 ({desc_path})")
+        await ch_iface.call_start_notify()
+        log("StartNotify OK，等待 Notifying=True...")
+        for _ in range(20):
+            try:
+                n = (await ch_props.call_get("org.bluez.GattCharacteristic1", "Notifying")).value
+                if n:
+                    log("Notifying=True 确认")
+                    return True
+            except Exception:
+                pass
+            await asyncio.sleep(0.5)
+        log("警告：StartNotify 后 Notifying 仍为 False")
     except Exception as e:
-        # 备选：StartNotify（BlueZ 会自己写 CCCD）
-        log(f"CCCD 写入失败（{type(e).__name__}: {e}），改用 StartNotify")
-        try:
-            await ch_iface.call_start_notify()
-            log("StartNotify OK")
-        except Exception as e2:
-            log(f"StartNotify 失败: {type(e2).__name__}: {e2}")
+        log(f"StartNotify 失败: {type(e).__name__}: {e}")
+    return False
 
 
-async def write_char(bus, tx_path, data):
+async def write_char(bus, tx_path, data, write_type="command"):
+    """写特征。write_type: request（带响应，Kodo 实测必须）或 command（无响应）。
+
+    Kodo 注释：V2 TX 若用 WRITE_NO_RESPONSE 写，Android 栈会静默丢帧，认证永远卡住。
+    """
     node = await bus.introspect("org.bluez", tx_path)
     ch = bus.get_proxy_object("org.bluez", tx_path, node)
     ch_iface = ch.get_interface("org.bluez.GattCharacteristic1")
-    await ch_iface.call_write_value(bytearray(data), {"type": Variant("s", "command")})
+    await ch_iface.call_write_value(bytes(data), {"type": Variant("s", write_type)})
 
 
 async def read_value(bus, path):
@@ -193,7 +223,7 @@ async def read_value(bus, path):
     return await ch_iface.call_read_value({})
 
 
-async def run_auth(bus, authkey_hex, rx_path):
+async def run_auth(bus, authkey_hex, rx_path, tx_path, desc_paths):
     from auth import (
         V2Accumulator, build_ack_frame, build_protobuf_frame, build_session_config,
         derive_session, encode_auth_device_info, encode_command_auth_step3,
@@ -230,7 +260,7 @@ async def run_auth(bus, authkey_hex, rx_path):
 
     bus.add_message_handler(on_message)
 
-    await start_notify(bus, rx_path)
+    await start_notify(bus, rx_path, desc_paths)
     log(f"已启用 {rx_path} 通知")
 
     async def expect(pred, label, timeout=10.0):
@@ -334,7 +364,7 @@ async def main():
 
             if await wait_services_resolved(props, timeout=15):
                 # 手环连接保持，读一次 2a00 验证 dbus 读写可用
-                char_paths = await find_characteristics(bus)
+                char_paths, desc_paths = await find_characteristics(bus)
                 if V2_TX not in char_paths or V2_RX not in char_paths:
                     log(f"缺少 V2 特征: {char_paths}")
                     continue
@@ -343,7 +373,7 @@ async def main():
                     log(f"dbus 读 2a00 OK: {bytes(val).decode(errors='replace')}")
                 except Exception as e:
                     log(f"读 2a00 失败（{type(e).__name__}: {e}）——继续尝试认证")
-                result = await run_auth(bus, authkey, char_paths[V2_RX])
+                result = await run_auth(bus, authkey, char_paths[V2_RX], char_paths[V2_TX], desc_paths)
                 print(f"RESULT: {result}")
                 from common import emit_json
                 emit_json(result)
