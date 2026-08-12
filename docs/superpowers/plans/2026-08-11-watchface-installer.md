@@ -556,7 +556,7 @@ git commit -m "docs(protocol): verify watchface push on device"
 **Interfaces:**
 - Produces: 可运行的空 Tauri 应用骨架（React + TS 模板），`cargo tauri dev` 可启动。
 
-- [ ] **Step 1: 生成项目**
+- [x] **Step 1: 生成项目**
 
 ```bash
 cd /home/hyperion/projects/minstall
@@ -565,22 +565,31 @@ npm create tauri-app@latest . -- --template react-ts --manager npm --yes
 
 （若 CLI 交互方式不同，按其提示选择 React + TypeScript 模板，覆盖到当前目录。）
 
-- [ ] **Step 2: 添加 btleplug 依赖**
+> 已执行：create-tauri-app 4.6.2，`--template react-ts --manager npm --identifier com.minstall.app --tauri-version 2`。
+> ⚠️ 使用 `--force` 时误删了 worktree 的 `.git` 指针与 docs/pocs（git 历史可恢复，已 `git checkout -- docs/ pocs/` 恢复）；
+> 后续执行此步应在 git 仓库根目录外的临时目录生成后再拷入，避免 --force 破坏版本控制元数据。
+
+- [x] **Step 2: 添加依赖（已按协议笔记修正：btleplug → bluer）**
 
 在 `src-tauri/Cargo.toml` 的 `[dependencies]` 中加入：
 
 ```toml
-btleplug = "0.11"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+bluer = "0.17"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "io-util"] }
 serde_json = "1"
 thiserror = "2"
 ```
 
-- [ ] **Step 3: 验证启动**
+> **偏差说明**：原计划用 `btleplug = "0.11"`（仅 BLE）。但 POC 真机验证（协议笔记 4.3/4.5 节）确认 Band 10 Pro 的 V2 协议走**经典蓝牙 SPP 通道（RFCOMM ch5）**，BLE GATT 5e/5f 写帧无响应；协议笔记明确建议 Rust 侧用 **bluer**（BlueZ DBus 绑定，支持 SPP Profile，AstroBox 同款）。后续 Task 12/13 的 ble 模块设计需按 SPP 通道调整（不再是 GATT 特征读写）。
+
+- [x] **Step 3: 验证启动**
 
 Run: `cd src-tauri && cargo build` 与 `cd /home/hyperion/projects/minstall && npm run tauri dev`（GUI 出现空窗口即通过；无 GUI 环境则 `cargo build` 通过即可）
 
-- [ ] **Step 4: 提交**
+> 已执行：`cargo build` 通过；`npx tauri build --debug --no-bundle` 产出 `target/debug/minstall`；GUI 启动验证通过（进程正常，已关闭）。
+> 环境坑：① npm 依赖安装需 `--include=dev --no-audit`（NODE_ENV=production + npmmirror 无 audit 接口）；② crates.io 直连慢，已配 rsproxy 镜像（~/.cargo/config.toml）。
+
+- [x] **Step 4: 提交**
 
 ```bash
 git add -A
