@@ -684,7 +684,9 @@ git commit -m "feat: add protocol constants and ble error types"
 - Consumes: `errors.rs` 的 `BleError`
 - Produces: `scanner::scan(timeout_secs: u64) -> Result<Vec<DeviceInfo>, BleError>`，`DeviceInfo { name: String, address: String, rssi: i16 }`；`scanner::filter_relevant(devices: Vec<DeviceInfo>) -> Vec<DeviceInfo>`；`connection::Manager`（持有 `BleClient` 句柄，方法 `connect(address)`, `disconnect()`, `client() -> &BleClient`）。
 
-- [ ] **Step 1: 写 scanner.rs（过滤为纯函数，可测）**
+- [x] **Step 1: 写 scanner.rs（过滤为纯函数，可测）**
+
+> **已按 bluer 重写**（原计划 btleplug）：扫描用 `bluer::Session::default_adapter().discover_devices()` 流式发现（经典/LE 混合），`DeviceInfo { name, address, rssi }` 加 `serde::Serialize`（供 Task 14 command 返回前端）；`filter_relevant` 为纯函数（关键词 mi/band/xiaomi，同 POC scan.py）。
 
 ```rust
 use btleplug::api::{Central, Peripheral, ScanFilter};
@@ -727,75 +729,22 @@ pub async fn scan(timeout_secs: u64) -> Result<Vec<DeviceInfo>, BleError> {
 }
 ```
 
-- [ ] **Step 2: 写 connection.rs**
+- [x] **Step 2: 写 connection.rs**
 
-```rust
-use btleplug::api::{Central, Peripheral};
-use btleplug::platform::{Adapter, Peripheral as PlatformPeripheral};
-use super::errors::BleError;
+> **已按 bluer rfcomm 重写**（原计划 btleplug GATT 连接）：`Manager { stream: Option<bluer::rfcomm::Stream> }`，`connect(address)` 解析 MAC → `Stream::connect(SocketAddr::new(addr, RFCOMM_CHANNEL))`（RFCOMM ch5，无需注册 Profile）；`stream()`/`stream_mut()` 供协议层读写帧；`disconnect()` drop 流（自动 shutdown）。
 
-pub struct Manager {
-    client: Option<PlatformPeripheral>,
-}
+- [x] **Step 3: scanner 过滤测试（写进 scanner.rs 底部）**
 
-impl Manager {
-    pub fn new() -> Self {
-        Self { client: None }
-    }
+> 已含两个测试：`filters_relevant_devices`、`empty_input_returns_empty`。
 
-    pub async fn connect(&mut self, address: &str) -> Result<(), BleError> {
-        let manager = btleplug::platform::Manager::new().await.map_err(|_| BleError::Adapter)?;
-        let adapter = manager.adapters().await.map_err(|_| BleError::Adapter)?
-            .into_iter().next().ok_or(BleError::Adapter)?;
-        let peripherals = adapter.peripherals().await.map_err(|_| BleError::Adapter)?;
-        let p = peripherals
-            .into_iter()
-            .find(|p| p.id().to_string() == address)
-            .ok_or_else(|| BleError::ConnectFailed(address.to_string()))?;
-        p.connect().await.map_err(|e| BleError::ConnectFailed(e.to_string()))?;
-        p.discover_services().await.map_err(|e| BleError::ConnectFailed(e.to_string()))?;
-        self.client = Some(p);
-        Ok(())
-    }
-
-    pub fn client(&self) -> Result<&PlatformPeripheral, BleError> {
-        self.client.as_ref().ok_or_else(|| BleError::ConnectFailed("未连接".into()))
-    }
-
-    pub async fn disconnect(&mut self) {
-        if let Some(p) = &self.client {
-            let _ = p.disconnect().await;
-        }
-        self.client = None;
-    }
-}
-```
-
-- [ ] **Step 3: scanner 过滤测试（写进 scanner.rs 底部）**
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn filters_relevant_devices() {
-        let input = vec![
-            DeviceInfo { name: "Xiaomi Band 10 Pro".into(), address: "A".into(), rssi: -50 },
-            DeviceInfo { name: "iPhone".into(), address: "B".into(), rssi: -70 },
-        ];
-        let out = filter_relevant(input);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].address, "A");
-    }
-}
-```
-
-- [ ] **Step 4: 构建 + 测试**
+- [x] **Step 4: 构建 + 测试**
 
 Run: `cd src-tauri && cargo test`
 Expected: `filters_relevant_devices` 通过。
 
-- [ ] **Step 5: 提交**
+> 已执行：`cargo test` 6 个测试全部通过（scanner 2 + consts 4）；`cargo build` 成功。未使用警告属预期（Task 13/14 消费）。
+
+- [x] **Step 5: 提交**
 
 ```bash
 git add src-tauri/src/ble
