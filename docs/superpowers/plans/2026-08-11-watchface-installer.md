@@ -1093,7 +1093,7 @@ git commit -m "feat(ui): add three-screen install wizard"
 - Consumes: 完整应用
 - Produces: 手动测试清单全部通过 + README 使用说明。
 
-- [ ] **Step 1: 按清单逐项真机验证**
+- [ ] **Step 1: 按清单逐项真机验证**（**待用户配合**：需要手环 + 有效 authkey + 测试 bin）
 
 - [ ] 1. 冷启动扫描 → 发现设备
 - [ ] 2. 输入正确 authkey → 认证成功
@@ -1102,13 +1102,16 @@ git commit -m "feat(ui): add three-screen install wizard"
 - [ ] 5. 安装损坏文件 → 前置校验拦截
 - [ ] 6. 推送中途断开蓝牙 → 错误提示 + 可重试
 
-任何一项失败 → 回到对应模块修复后重测。
+> ⚠️ 待办：`ble::connection::Manager::connect` 目前直接 `rfcomm::Stream::connect`（内核 socket），
+> 未实现 BLE 配对 agent（POC 用 DisplayYesNo agent）。真机验证时若连接失败需补配对逻辑。
 
-- [ ] **Step 2: 更新 README 使用说明**
+- [x] **Step 2: 更新 README 使用说明**
 
 补充：安装前置条件、authkey 获取指引（指向第三方工具）、操作步骤、常见错误对照表。
 
-- [ ] **Step 3: 提交 + 合并**
+> 已更新：新增「技术路线」「架构」「开发」「使用说明」（前置条件 / 操作步骤 / 错误对照表）。
+
+- [ ] **Step 3: 提交 + 合并**（待 Step 1 真机验证通过后执行）
 
 ```bash
 git add README.md
