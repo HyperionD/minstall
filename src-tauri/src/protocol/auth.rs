@@ -42,6 +42,7 @@ impl Default for DeviceInfo {
 }
 
 /// 等待某帧满足条件；自动回 ACK。超时/断开返回错误。
+/// 注意：底层 read 可能永久阻塞，必须用 timeout 包裹，每次至多等 200ms。
 async fn wait_for<F>(ch: &mut SppChannel<'_>, predicate: F, label: &str, timeout_secs: u64) -> Result<(u8, u8, Vec<u8>), BleError>
 where
     F: Fn(u8, u8, &[u8]) -> bool,
@@ -51,8 +52,12 @@ where
         if tokio::time::Instant::now() >= deadline {
             return Err(BleError::AuthFailed(format!("等待 {label} 超时")));
         }
-        if !ch.read_more().await.map_err(BleError::ConnectFailed)? {
-            return Err(BleError::AuthFailed(format!("等待 {label} 期间 SPP 断开")));
+        // 单次读取至多等 200ms（read 无数据时永久阻塞，必须限时）
+        match tokio::time::timeout(std::time::Duration::from_millis(200), ch.read_more()).await {
+            Ok(Ok(true)) => {}
+            Ok(Ok(false)) => return Err(BleError::AuthFailed(format!("等待 {label} 期间 SPP 断开"))),
+            Ok(Err(e)) => return Err(BleError::ConnectFailed(e)),
+            Err(_) => continue, // 无数据，回到循环检查 deadline
         }
         for (pt, seq, payload) in ch.drain_ack().await.map_err(BleError::ConnectFailed)? {
             if predicate(pt, seq, &payload) {

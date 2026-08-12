@@ -1,9 +1,9 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 
-mod ble;
-mod commands;
-mod events;
-mod protocol;
+pub mod ble;
+pub mod commands;
+pub mod events;
+pub mod protocol;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

@@ -243,8 +243,14 @@ pub async fn push(
             if tokio::time::Instant::now() >= deadline {
                 return Err(BleError::PushFailed { chunk: 0, detail: format!("等待 {label} 超时") });
             }
-            if !ch.read_more().await.map_err(BleError::ConnectFailed)? {
-                return Err(BleError::PushFailed { chunk: 0, detail: format!("等待 {label} 期间 SPP 断开") });
+            // 单次读取至多等 200ms（read 无数据时永久阻塞，必须限时）
+            match tokio::time::timeout(std::time::Duration::from_millis(200), ch.read_more()).await {
+                Ok(Ok(true)) => {}
+                Ok(Ok(false)) => {
+                    return Err(BleError::PushFailed { chunk: 0, detail: format!("等待 {label} 期间 SPP 断开") })
+                }
+                Ok(Err(e)) => return Err(BleError::ConnectFailed(e)),
+                Err(_) => continue, // 无数据，回到循环检查 deadline
             }
             for (pt, _fseq, payload) in ch.drain_ack().await.map_err(BleError::ConnectFailed)? {
                 if pt == V2_PACKET_DATA {
@@ -355,8 +361,14 @@ async fn drain_until_ack(ch: &mut SppChannel<'_>, seq_target: u8) -> Result<(), 
         if tokio::time::Instant::now() >= deadline {
             return Ok(()); // 超时继续，避免死等
         }
-        if !ch.read_more().await.map_err(BleError::ConnectFailed)? {
-            return Err(BleError::PushFailed { chunk: 0, detail: "等待 ACK 期间 SPP 断开".into() });
+        // 单次读取至多等 200ms（read 无数据时永久阻塞，必须限时）
+        match tokio::time::timeout(std::time::Duration::from_millis(200), ch.read_more()).await {
+            Ok(Ok(true)) => {}
+            Ok(Ok(false)) => {
+                return Err(BleError::PushFailed { chunk: 0, detail: "等待 ACK 期间 SPP 断开".into() })
+            }
+            Ok(Err(e)) => return Err(BleError::ConnectFailed(e)),
+            Err(_) => continue,
         }
         for (pt, seq, _) in ch.drain_ack().await.map_err(BleError::ConnectFailed)? {
             if pt == V2_PACKET_ACK && seq == seq_target {
