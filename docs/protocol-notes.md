@@ -204,6 +204,83 @@
    - PhoneNonce（明文）→ 手环回 ACK + Data 帧（Command type=1, subtype=26 = CMD_NONCE 开头）
    - ⚠️ WatchNonce 数据收到 8B 开头 `0801101a1a021804` 后手环关机（待续：需持续累积分片 + 完整等待）
 
+### 4.4 认证响应 `0801101a1a021804` 破解 —— WearPacket 协议 + NO_BOUND（2026-08-12 真机）
+
+**重大发现：Band 10 Pro 的认证响应是 astrobox 的 WearPacket 协议（不是 Gadgetbridge 的 Command 协议），字节层面两者兼容。**
+
+#### 破解过程（真机）
+
+1. 用 astrobox 的 proto（`AstroBox-NG-Module-Pb` → `protos/xiaomi/wear.proto` + `wear_account.proto`）编译后解析手环响应 `0801101a1a021804`：
+   ```
+   type = 1 (ACCOUNT)
+   id   = 26 (AUTH_VERIFY)
+   account.error_code = 4 (NO_BOUND = 未绑定)
+   ```
+2. **发送帧验证**：astrobox 的 `build_auth_step_1`（WearPacket{type=ACCOUNT, id=AUTH_VERIFY, AuthAppVerify{app_random}}）与我们发送的 PhoneNonce（Command{type=1, subtype=26, Auth{phoneNonce}}）**字节完全一致**（`0801101a1a15f201120a10<nonce16>`）—— 字段编号恰好相同（type=1/id=26/payload=3 ↔ type=1/subtype=26/auth=3；auth_app_verify=30 ↔ phoneNonce=30；app_random=1 ↔ nonce=1）。
+3. **结论**：认证流程本身正确，卡点在**手环绑定状态**——手环在 AUTH_VERIFY 阶段返回 `error_code=NO_BOUND(4)`，即**手环固件里没有有效的绑定记录**。
+
+#### WearPacket 认证协议（astrobox 同款，Band 10 Pro）
+
+| 阶段 | 消息 | 方向 | 内容 |
+|---|---|---|---|
+| 1 | `WearPacket{type=ACCOUNT(1), id=AUTH_VERIFY(26), AuthAppVerify{app_random}}` | 电脑→手环 | 等价于 PhoneNonce |
+| 2 | `WearPacket{type=ACCOUNT, id=AUTH_VERIFY(26), AuthDeviceVerify{device_random, device_sign}}` | 手环→电脑 | 等价于 WatchNonce{nonce, hmac} |
+| 3 | `WearPacket{type=ACCOUNT, id=AUTH_CONFIRM(27), AuthAppConfirm{app_sign, encrypt_companion_device}}` | 电脑→手环 | 等价于 AuthStep3 |
+| 4 | `WearPacket{type=ACCOUNT, id=AUTH_CONFIRM(27), AuthDeviceConfirm{confirm_result}}` | 手环→电脑 | 认证完成 |
+| 错误 | `WearPacket{type=ACCOUNT, id=AUTH_VERIFY(26), error_code}` | 手环→电脑 | `NO_BOUND(4)=未绑定`，`HAVE_BOUND(1)=已绑定` 等 |
+
+加密算法与 Gadgetbridge/Kodo 相同（kdf_miwear、verifyWatchHmac、AES-CCM encrypt_companion_device）。
+
+#### 绑定状态要求（关键约束）
+
+- **AUTH_VERIFY 认证要求手环固件里有绑定记录**：手环恢复出厂 / App 内解绑会清除绑定 → 返回 NO_BOUND。
+- **正确流程**（Gadgetbridge issue #6486 用户验证）：
+  1. 官方 App（小米运动健康）绑定手环 → 从手机日志 `XiaomiFit.main.log` 提取 token（authkey）
+  2. 蓝牙设置中 unpair 手环（**不要恢复出厂**）
+  3. 手环上选择"配对新手环"
+  4. 电脑端用 authkey 认证 → 成功
+- **unpair（蓝牙解配）≠ 恢复出厂/App 内解绑**：只有前者能保留手环固件绑定记录（authkey 继续有效）。
+- 手环重新绑定后需在**手环端取消手机配对**，让电脑能重新连接（BLE 配对/SPP）。
+
+### 4.5 真机认证验证通过（2026-08-12）—— Task 7 完成
+
+**SPP 认证握手在 Band 10 Pro 真机上完整跑通（authkey 绑定状态下）！**
+
+完整交互日志（成功路径）：
+```
+→ V1 Hello badcfe00c00300000100ef
+→ START_SESSION_REQUEST (seq=0)
+RX type=2 seq=0 payload=02010300030131020200008003020003000402007017   ← START_SESSION_RESPONSE
+→ PhoneNonce <16B>
+RX type=1 seq=0  ← ACK
+RX type=3 seq=0 payload=0101 + 0801101a1a37fa01340a10<nonce16>1220<hmac32>  ← WatchNonce（61B）
+→ ACK seq=0
+watch HMAC 验证通过
+→ AuthStep3 (seq=1)
+RX type=1 seq=1  ← ACK
+RX type=3 seq=1 payload=0101 + 0801101b1a138a0210080110bff69fbf0f18ca8fa240208441  ← subtype=27 确认
+★★★ 认证成功（subtype=27）★★★
+```
+
+#### 成功的前提条件（真机验证）
+
+1. **手环必须处于已绑定状态**（authkey 在手环固件中有有效绑定记录）：
+   - 用户用官方 App 重新绑定手环 → 提取新 authkey `22dc81dea345e53c4d8c8a96fecc7454`
+   - 手环恢复出厂/解绑后 authkey 失效 → AUTH_VERIFY 返回 `error_code=NO_BOUND(4)`
+2. **电脑端 BLE 配对必须用 DisplayYesNo agent**（非 NoInputNoOutput）：
+   - 手环在配对模式发起的是需要确认的配对（手环屏幕显示"请在手机上确认配对"）
+   - `NoInputNoOutput` agent 无法响应 → 手环显示"配对失败"
+   - `DisplayYesNo` agent（`RequestConfirmation` 自动接受）→ 配对成功
+3. **配对成功后**：Paired=True + Connected=True → SPP ConnectProfile 成功 → V1 Hello → V2 认证。
+4. **认证成功后**：后续命令可走 PROTOBUF 加密通道（encrypt=true，encryptV2/decryptV2）。
+
+#### 数据验证
+
+- WatchNonce 完整 61B：`0801101a1a37fa01340a10<nonce16>1220<hmac32>` —— 与 golden `_G_WATCH_NONCE_CMD` 结构一致（`1a 37` 表示 auth 55B，field 31 wire2）
+- watch HMAC 用 deriveSession 派生的 decKey 验证通过（authkey 正确）
+- AuthStep3 后手环返回 `type=1, subtype=27`（CMD_AUTH）→ 认证完成
+- 认证期间所有数据帧为明文（opCode=1）；认证完成后 PROTOBUF 通道切换为加密（opCode=2）
+
 #### 关键技术点
 
 | 项 | 值 | 说明 |
