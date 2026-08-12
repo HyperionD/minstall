@@ -8,15 +8,17 @@ use bluer::rfcomm::{SocketAddr as RfcommSocketAddr, Stream};
 use bluer::Address;
 
 use super::errors::BleError;
+use crate::protocol::auth::Session;
 use crate::protocol::consts::RFCOMM_CHANNEL;
 
 pub struct Manager {
     stream: Option<Stream>,
+    session: Option<Session>,
 }
 
 impl Manager {
     pub fn new() -> Self {
-        Self { stream: None }
+        Self { stream: None, session: None }
     }
 
     /// 建立 SPP 连接（RFCOMM ch5）。
@@ -51,6 +53,18 @@ impl Manager {
 
     pub fn is_connected(&self) -> bool {
         self.stream.is_some()
+    }
+
+    /// 保存认证会话（供安装使用）。
+    pub fn set_session(&mut self, session: Session) {
+        self.session = Some(session);
+    }
+
+    /// 取认证会话；未认证返回错误。
+    pub fn session(&self) -> Result<&Session, BleError> {
+        self.session
+            .as_ref()
+            .ok_or_else(|| BleError::AuthFailed("尚未认证（请先连接并输入 authkey）".into()))
     }
 }
 

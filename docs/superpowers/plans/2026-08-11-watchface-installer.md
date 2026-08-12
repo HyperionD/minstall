@@ -886,7 +886,7 @@ git commit -m "feat: implement auth handshake and watchface push protocol"
 - Consumes: Task 12/13 各模块
 - Produces: Commands `scan_devices() -> Result<Vec<DeviceInfo>, String>`、`connect(address: String)`、`disconnect()`、`authenticate(authkey: String)`、`install_watchface(bin_path: String)`；事件 `install:progress { sent: usize, total: usize }`。
 
-- [ ] **Step 1: 写 commands.rs**
+- [x] **Step 1: 写 commands.rs**
 
 ```rust
 use tauri::{AppHandle, Emitter, State};
@@ -933,36 +933,18 @@ pub async fn install_watchface(
 }
 ```
 
-- [ ] **Step 2: 更新 main.rs**
+- [x] **Step 2: 更新 lib.rs**（Tauri 2 模板入口是 lib.rs 而非 main.rs）
 
-```rust
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use tauri::Manager as _;
+> `Manager` 以 `Arc<Mutex<Manager>>` 共享（`commands::shared_manager()`）；认证会话保存在 Manager（`set_session`/`session`）供安装使用；`install_watchface` 持有 AppHandle 发射 `install:progress` 事件。
 
-fn main() {
-    tauri::Builder::default()
-        .manage(Arc::new(Mutex::new(ble::connection::Manager::new())))
-        .invoke_handler(tauri::generate_handler![
-            commands::scan_devices,
-            commands::connect,
-            commands::disconnect,
-            commands::authenticate,
-            commands::install_watchface,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-}
-```
-
-（`Manager` 需包成 `Arc<Mutex<...>>` 以便跨 command 共享；`connect`/`disconnect` 用 `MutexGuard` 可变访问，其余用只读访问。）
-
-- [ ] **Step 3: 构建**
+- [x] **Step 3: 构建**
 
 Run: `cd src-tauri && cargo build`
 Expected: 编译通过。
 
-- [ ] **Step 4: 提交**
+> 已执行：`cargo build` 通过；`cargo test` 27 个测试全部通过；`tauri build --debug --no-bundle` 产出 `target/debug/minstall`。警告降至 16 个（未使用常量，Task 15 前端消费后归零）。
+
+- [x] **Step 4: 提交**
 
 ```bash
 git add src-tauri/src
