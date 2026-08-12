@@ -859,12 +859,15 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: 测试通过后，把 auth.rs / watchface.rs 中的协议流程按协议笔记写完整**（这是本任务的核心交付：两个模块必须能完成真实握手/推送，不是骨架）
+- [x] **Step 3: 测试通过后，把 auth.rs / watchface.rs 中的协议流程按协议笔记写完整**（这是本任务的核心交付：两个模块必须能完成真实握手/推送，不是骨架）
 
 Run: `cd src-tauri && cargo test`
 Expected: `chunks_data_by_size`、`chunk_boundary_exact_multiple` 通过；auth/watchface 编译通过。
 
-- [ ] **Step 4: 提交**
+> 已执行：`cargo test` 27 个测试全部通过，含 POC golden 交叉验证（CRC-16/ARC 标准向量、V2 帧往返、accumulator 重同步、protobuf golden 字节、derive_session 确定性、AES-128-CCM/CTR golden 向量、MD5/CRC32 已知向量、MASS 帧重组、WearPacket 编解码、表盘 id/name 解析、authkey 校验）。`cargo build` 成功。
+> 说明：auth/watchface 的 BLE 交互被替换为 SPP 流交互（bluer rfcomm Stream + V2Accumulator）；`push` 完整实现 WatchFace PREPARE → Mass PREPARE → MASS 分片上传（BATCH=2）→ 等 InstallResult（协议笔记 5 节）。
+
+- [x] **Step 4: 提交**
 
 ```bash
 git add src-tauri/src/protocol
