@@ -13,6 +13,7 @@ class MainActivity : TauriActivity() {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     AppContext.ctx = applicationContext
+    BleRfcomm.init()
     requestBluetoothPermissions()
   }
 

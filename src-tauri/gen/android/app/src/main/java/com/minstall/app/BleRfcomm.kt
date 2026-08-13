@@ -13,6 +13,12 @@ object BleRfcomm {
     const val SPP_UUID = "00001101-0000-1000-8000-00805f9b34fb"
 
     init {
+        init()
+    }
+
+    /** 显式初始化：加载 native 库并让 Rust 保存 JavaVM（MainActivity 启动时调用）。 */
+    @JvmStatic
+    fun init() {
         System.loadLibrary("minstall_lib")
         initJni()
     }
