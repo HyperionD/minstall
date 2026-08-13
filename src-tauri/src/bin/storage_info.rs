@@ -18,7 +18,7 @@ async fn main() {
     let t0 = Instant::now();
     eprintln!("[storage] 连接 {} ...", args[1]);
     mgr.connect(&args[1]).await.expect("连接失败");
-    let session = auth::authenticate(&mut mgr, &args[2], None).await.expect("认证失败");
+    let session = auth::authenticate(mgr.stream_mut().expect("连接"), &args[2], None).await.expect("认证失败");
     eprintln!("[storage] ✅ 认证成功 ({:?})", t0.elapsed());
 
     let stream = mgr.stream_mut().expect("stream");

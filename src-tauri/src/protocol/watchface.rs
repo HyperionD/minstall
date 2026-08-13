@@ -5,7 +5,6 @@
 
 use std::fs;
 
-use crate::ble::connection::Manager;
 use crate::ble::errors::BleError;
 use crate::protocol::auth::Session;
 use crate::protocol::consts::*;
@@ -193,13 +192,18 @@ fn protobuf_body(payload: &[u8], session: &Session) -> Option<Vec<u8>> {
     }
 }
 
-/// 安装表盘：认证后调用（manager 已连 SPP）。on_progress(sent_bytes, total_bytes)。
-pub async fn push(
-    manager: &mut Manager,
+/// 安装表盘：认证后调用（stream 已连 SPP，seq 由调用方维护）。on_progress(sent_bytes, total_bytes)。
+/// S 为传输层（tokio AsyncRead+AsyncWrite）：Linux bluer Stream / Android JNI 桥。
+pub async fn push<S>(
+    stream: &mut S,
     session: &Session,
     bin_path: &str,
+    seq_ref: &mut u8,
     on_progress: impl Fn(usize, usize),
-) -> Result<(), BleError> {
+) -> Result<(), BleError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     let data = fs::read(bin_path).map_err(|e| BleError::FileError(e.to_string()))?;
     if data.is_empty() {
         return Err(BleError::FileError("文件为空".into()));
@@ -211,31 +215,34 @@ pub async fn push(
         data.len()
     );
 
-    let mut seq = manager.seq();
-    let stream = manager.stream_mut()?;
+    let mut seq = *seq_ref; // 局部 u8 序列号（内部递增，结束写回 seq_ref）
     let mut ch = SppChannel::new(stream);
 
     // 发送加密 WearPacket 帧
-    async fn send_enc(
-        ch: &mut SppChannel<'_>,
+    async fn send_enc<S>(
+        ch: &mut SppChannel<'_, S>,
         session: &Session,
         seq: &mut u8,
         wp: &[u8],
-    ) -> Result<(), BleError> {
+    ) -> Result<(), BleError>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
         let frame = build_protobuf_frame(*seq, wp, true, &session.enc_key);
         *seq = seq.wrapping_add(1);
         ch.write(&frame).await.map_err(BleError::ConnectFailed)
     }
 
     // 等待 WearPacket 应答（加密通道）
-    async fn wait_wp<'x, F>(
-        ch: &mut SppChannel<'x>,
+    async fn wait_wp<'x, S, F>(
+        ch: &mut SppChannel<'x, S>,
         session: &Session,
         predicate: F,
         label: &str,
         timeout_secs: u64,
     ) -> Result<WearPacket, BleError>
     where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
         F: Fn(&WearPacket) -> bool,
     {
         let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs);
@@ -344,14 +351,13 @@ pub async fn push(
         eprintln!("[minstall] MASS {idx}/{total} ({sent}B) ack_wait={:?}", t_ack.elapsed());
     }
     eprintln!("[minstall] MASS 上传完成 {total} 块 耗时 {:?}", t_upload.elapsed());
+    seq = data_seq; // 上传后的下一个 seq（结尾统一写回 seq_ref）
     let avg_wait = if ack_waits.is_empty() {
         0.0
     } else {
         ack_waits.iter().map(|d| d.as_secs_f64()).sum::<f64>() / ack_waits.len() as f64
     };
     eprintln!("[minstall] 平均每批 ACK 等待 {avg_wait:.3}s（共 {} 批）", ack_waits.len());
-    // 关键：上传后 seq 必须更新到 data_seq（后续查询用）。否则查询帧 seq 与 MASS 冲突，手环不响应。
-    seq = data_seq;
 
     // 4) 确认安装结果：优先等手环推送 InstallResult（id=5，code 2/3 成功）；
     //    手环经常不推（真机验证：上传完成后有时只推中间通知），此时主动查询
@@ -401,9 +407,8 @@ pub async fn push(
         eprintln!("[minstall] 列表未见 {wp_id}，手环可能仍在安装，20s 后重试...");
         tokio::time::sleep(tokio::time::Duration::from_secs(20)).await;
     }
-    // 写回会话 seq（供后续查询/安装复用，避免 seq 冲突）；先释放 ch 对 stream 的借用
-    drop(ch);
-    manager.advance_seq(seq);
+    // seq 由调用方维护（已通过 &mut seq 递增），此处直接返回结果
+    *seq_ref = seq; // 写回会话 seq（供后续查询/安装复用，避免 seq 冲突）
     if found {
         Ok(())
     } else {
@@ -412,11 +417,14 @@ pub async fn push(
 }
 
 /// 发 GET_INSTALLED_LIST 并解析响应中的表盘 id 列表。
-async fn query_installed_ids(
-    ch: &mut SppChannel<'_>,
+async fn query_installed_ids<S>(
+    ch: &mut SppChannel<'_, S>,
     session: &Session,
     seq: &mut u8,
-) -> Vec<String> {
+) -> Vec<String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     let frame = build_protobuf_frame(*seq, &encode_get_installed_list(), true, &session.enc_key);
     *seq = seq.wrapping_add(1);
     if ch.write(&frame).await.is_err() {
@@ -449,9 +457,15 @@ async fn query_installed_ids(
 }
 
 /// 查询手环存储使用（GET_STORAGE_INFO）。返回 (used_bytes, total_bytes)。
-pub async fn query_storage(manager: &mut Manager, session: &Session) -> Result<(u64, u64), BleError> {
-    let mut seq = manager.seq();
-    let stream = manager.stream_mut()?;
+/// 查询手环存储使用（GET_STORAGE_INFO）。返回 (used_bytes, total_bytes)。
+pub async fn query_storage<S>(
+    stream: &mut S,
+    session: &Session,
+    seq: &mut u8,
+) -> Result<(u64, u64), BleError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     let mut ch = SppChannel::new(stream);
 
     // GET_STORAGE_INFO: WearPacket{type=SYSTEM(2), id=62}，无 payload
@@ -460,8 +474,8 @@ pub async fn query_storage(manager: &mut Manager, session: &Session) -> Result<(
         out.extend_from_slice(&field_varint(2, WP_ID_GET_STORAGE_INFO as u64));
         out
     };
-    let frame = build_protobuf_frame(seq, &pkt, true, &session.enc_key);
-    seq = seq.wrapping_add(1);
+    let frame = build_protobuf_frame(*seq, &pkt, true, &session.enc_key);
+    *seq = seq.wrapping_add(1);
     ch.write(&frame).await.map_err(BleError::ConnectFailed)?;
 
     // 等响应：WearPacket{type=2, id=62, System{storage_info=44{used=1, total=2}}}
@@ -488,7 +502,6 @@ pub async fn query_storage(manager: &mut Manager, session: &Session) -> Result<(
         tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
     }
     drop(ch);
-    manager.advance_seq(seq);
     result.ok_or_else(|| BleError::PushFailed { chunk: 0, detail: "存储查询超时或响应异常".into() })
 }
 
@@ -525,7 +538,13 @@ fn parse_storage_info(body: &[u8]) -> Option<(u64, u64)> {
 /// 读取直到收到指定 seq 的 ACK（期间回手环推送的 ACK）。
 /// 必须等到 ACK 才能继续：手环处理慢（真机 ~18KB/s，BATCH=2 每批 ~1.3s），
 /// 超时继续会导致手环丢数据（表盘损坏）。
-async fn drain_until_ack(ch: &mut SppChannel<'_>, seq_target: u8) -> Result<(), BleError> {
+async fn drain_until_ack<S>(
+    ch: &mut SppChannel<'_, S>,
+    seq_target: u8,
+) -> Result<(), BleError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(60);
     loop {
         if tokio::time::Instant::now() >= deadline {

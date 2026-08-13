@@ -26,13 +26,14 @@ async fn main() {
     mgr.connect(addr).await.expect("连接失败");
     eprintln!("[speedtest] ✅ 连接成功 ({:?})", t0.elapsed());
 
-    let session = auth::authenticate(&mut mgr, authkey, None).await.expect("认证失败");
+    let session = auth::authenticate(mgr.stream_mut().expect("连接"), authkey, None).await.expect("认证失败");
     eprintln!("[speedtest] ✅ 认证成功 ({:?})", t0.elapsed());
     mgr.set_session(session);
 
     let session = mgr.session().expect("取会话失败");
     let t1 = Instant::now();
-    match watchface::push(&mut mgr, &session, bin_path, |sent, total| {
+    let mut seq = session.seq;
+    match watchface::push(mgr.stream_mut().expect("连接"), &session, bin_path, &mut seq, |sent, total| {
         eprintln!("[speedtest] 进度: {sent} / {total} 字节");
     })
     .await

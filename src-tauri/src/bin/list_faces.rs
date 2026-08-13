@@ -20,7 +20,7 @@ async fn main() {
     mgr.connect(&args[1]).await.expect("连接失败");
     eprintln!("[list] ✅ 连接成功 ({:?})", t0.elapsed());
 
-    let session = auth::authenticate(&mut mgr, &args[2], None).await.expect("认证失败");
+    let session = auth::authenticate(mgr.stream_mut().expect("连接"), &args[2], None).await.expect("认证失败");
     eprintln!("[list] ✅ 认证成功 ({:?})", t0.elapsed());
 
     let stream = mgr.stream_mut().expect("stream");

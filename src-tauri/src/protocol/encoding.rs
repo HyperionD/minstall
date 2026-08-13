@@ -139,13 +139,15 @@ impl V2Accumulator {
 }
 
 /// SPP 通道：流 + 帧累积器 + 自动 ACK，供认证/推送共用。
-pub struct SppChannel<'a> {
-    pub stream: &'a mut bluer::rfcomm::Stream,
+/// S 为传输层（tokio AsyncRead+AsyncWrite）：Linux 用 bluer::rfcomm::Stream，
+/// Android 用 JNI 桥的字节流 —— 协议层与具体平台解耦。
+pub struct SppChannel<'a, S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin> {
+    pub stream: &'a mut S,
     pub acc: V2Accumulator,
 }
 
-impl<'a> SppChannel<'a> {
-    pub fn new(stream: &'a mut bluer::rfcomm::Stream) -> Self {
+impl<'a, S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin> SppChannel<'a, S> {
+    pub fn new(stream: &'a mut S) -> Self {
         Self { stream, acc: V2Accumulator::new() }
     }
 

@@ -47,7 +47,8 @@ pub async fn disconnect(state: State<'_, SharedManager>) -> Result<(), String> {
 #[tauri::command]
 pub async fn authenticate(state: State<'_, SharedManager>, authkey: String) -> Result<(), String> {
     let mut mgr = state.inner().lock().await;
-    let session = auth::authenticate(&mut mgr, &authkey, None)
+    let stream = mgr.stream_mut().map_err(|e| e.to_string())?;
+    let session = auth::authenticate(stream, &authkey, None)
         .await
         .map_err(|e| e.to_string())?;
     // 认证后 seq 从 2 起（0=PhoneNonce, 1=AuthStep3），供后续发送复用
@@ -69,9 +70,18 @@ pub async fn get_storage_info(
             return Err(e.to_string());
         }
     };
-    eprintln!("[minstall] get_storage_info: 开始查询 (seq={})", mgr.seq());
-    match watchface::query_storage(&mut mgr, &session).await {
+    let mut seq = mgr.seq();
+    let stream = match mgr.stream_mut() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[minstall] get_storage_info: 无连接 {e}");
+            return Err(e.to_string());
+        }
+    };
+    eprintln!("[minstall] get_storage_info: 开始查询 (seq={seq})");
+    match watchface::query_storage(stream, &session, &mut seq).await {
         Ok((used, total)) => {
+            mgr.advance_seq(seq);
             eprintln!("[minstall] get_storage_info: used={used} total={total}");
             Ok(StorageInfo { used, total })
         }
@@ -90,12 +100,15 @@ pub async fn install_watchface(
 ) -> Result<(), String> {
     let mut mgr = state.inner().lock().await;
     let session = mgr.session().map_err(|e| e.to_string())?;
-    watchface::push(&mut mgr, &session, &bin_path, |sent, total| {
+    let mut seq = mgr.seq();
+    let stream = mgr.stream_mut().map_err(|e| e.to_string())?;
+    let result = watchface::push(stream, &session, &bin_path, &mut seq, |sent, total| {
         let _ = app.emit(
             "install:progress",
             serde_json::json!({ "sent": sent, "total": total }),
         );
     })
-    .await
-    .map_err(|e| e.to_string())
+    .await;
+    mgr.advance_seq(seq);
+    result.map_err(|e| e.to_string())
 }

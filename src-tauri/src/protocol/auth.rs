@@ -4,7 +4,6 @@
 //! V1 Hello → START_SESSION → PhoneNonce → WatchNonce(HMAC 验证) → AuthStep3 → 认证完成。
 //! 认证成功后返回 Session（加密通道密钥），供 watchface 安装使用。
 
-use crate::ble::connection::Manager;
 use crate::ble::errors::BleError;
 use crate::protocol::consts::*;
 use crate::protocol::encoding::*;
@@ -64,8 +63,14 @@ fn region_str() -> String {
 
 /// 等待某帧满足条件；自动回 ACK。超时/断开返回错误。
 /// 注意：底层 read 可能永久阻塞，必须用 timeout 包裹，每次至多等 200ms。
-async fn wait_for<F>(ch: &mut SppChannel<'_>, predicate: F, label: &str, timeout_secs: u64) -> Result<(u8, u8, Vec<u8>), BleError>
+async fn wait_for<S, F>(
+    ch: &mut SppChannel<'_, S>,
+    predicate: F,
+    label: &str,
+    timeout_secs: u64,
+) -> Result<(u8, u8, Vec<u8>), BleError>
 where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     F: Fn(u8, u8, &[u8]) -> bool,
 {
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs);
@@ -90,15 +95,18 @@ where
 }
 
 /// 执行完整认证握手。成功返回 Session（加密通道密钥 + 后续 seq）。
-pub async fn authenticate(
-    manager: &mut Manager,
+/// S 为传输层（tokio AsyncRead+AsyncWrite）：Linux bluer Stream / Android JNI 桥。
+pub async fn authenticate<S>(
+    stream: &mut S,
     authkey_hex: &str,
     device_info: Option<&DeviceInfo>,
-) -> Result<Session, BleError> {
+) -> Result<Session, BleError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     let secret = parse_authkey(authkey_hex)
         .ok_or_else(|| BleError::AuthFailed(format!("authkey 应为 {AUTHKEY_LEN} hex 字符（可带 0x 前缀）")))?;
 
-    let stream = manager.stream_mut()?;
     let mut ch = SppChannel::new(stream);
     let di = device_info.cloned().unwrap_or_default();
 
