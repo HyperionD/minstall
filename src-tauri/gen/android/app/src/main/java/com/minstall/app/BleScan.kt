@@ -29,6 +29,16 @@ object BleScan {
      */
     @JvmStatic
     fun scan(timeoutMs: Long): Array<String> {
+        return try {
+            scanInternal(timeoutMs)
+        } catch (e: Exception) {
+            // 异常时返回空（不崩溃）；问题可查 logcat
+            android.util.Log.e("BleScan", "scan failed", e)
+            emptyArray()
+        }
+    }
+
+    private fun scanInternal(timeoutMs: Long): Array<String> {
         val adapter = BluetoothAdapter.getDefaultAdapter()
             ?: return emptyArray()
         if (!adapter.isEnabled) return emptyArray()
@@ -63,7 +73,13 @@ object BleScan {
                 }
             }
         }
-        ctx.registerReceiver(receiver, filter)
+        // Android 13+ (API 33+) 必须指定 flags，否则抛 SecurityException
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            ctx.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            ctx.registerReceiver(receiver, filter)
+        }
 
         val started = adapter.startDiscovery()
         if (!started) {
