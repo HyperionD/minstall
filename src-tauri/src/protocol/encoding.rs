@@ -85,8 +85,15 @@ impl V2Accumulator {
         Self { buf: Vec::new() }
     }
 
-    pub fn feed(&mut self, data: &[u8]) -> Vec<(u8, u8, Vec<u8>)> {
+    pub fn feed(&mut self, data: &[u8]) {
+        // 只累积不解析：帧由 drain() 统一提取（read_more → drain_ack 两次调用，
+        // 若 feed 内部解析会双重消费导致帧丢失 —— 真机验证发现的 bug）。
         self.buf.extend_from_slice(data);
+    }
+
+    /// 便捷：feed + drain 一步完成（测试/一次性解析用）。
+    pub fn feed_drain(&mut self, data: &[u8]) -> Vec<(u8, u8, Vec<u8>)> {
+        self.feed(data);
         self.drain()
     }
 
@@ -422,7 +429,7 @@ pub fn encode_mass_prepare(md5: &[u8], size: u32) -> Vec<u8> {
     req.extend_from_slice(&field_bytes(2, md5));
     req.extend_from_slice(&field_varint(3, size as u64));
     let mass = field_bytes(1, &req); // Mass payload（字段 24，非 7！）
-    encode_wear_packet(WEARPACKET_TYPE_MASS, WP_ID_MASS_PREPARE, WEARPACKET_TYPE_MASS as u64, &mass)
+    encode_wear_packet(WEARPACKET_TYPE_MASS, WP_ID_MASS_PREPARE, WEARPACKET_PAYLOAD_MASS as u64, &mass)
 }
 
 /// 解析收包 WearPacket 关键字段。
@@ -486,9 +493,9 @@ pub fn parse_wear_packet(data: &[u8]) -> Option<WearPacket> {
             }
         }
     }
-    // Mass payload（字段 24）
+    // Mass payload（字段 24 = WEARPACKET_PAYLOAD_MASS，非 type 22）
     for (num, val) in &fields {
-        if *num == WEARPACKET_TYPE_MASS as u64 {
+        if *num == WEARPACKET_PAYLOAD_MASS as u64 {
             if let ProtoVal::Bytes(b) = val {
                 let m = parse_proto_fields(b).ok()?;
                 for (mn, mv) in &m {
@@ -725,14 +732,15 @@ mod tests {
         let mut acc = V2Accumulator::new();
         let mut out = Vec::new();
         for b in &stream {
-            out.extend(acc.feed(&[*b]));
+            acc.feed(&[*b]);
+            out.extend(acc.drain());
         }
         assert_eq!(out.len(), 3);
         assert!(acc.buf.is_empty());
         // 非法前缀重同步
         let mut junk = vec![0xde, 0xad, 0xbe, 0xef];
         junk.extend_from_slice(&stream);
-        let out = V2Accumulator::new().feed(&junk);
+        let out = V2Accumulator::new().feed_drain(&junk);
         assert_eq!(out.len(), 3);
         assert_eq!(out[0].0, V2_PACKET_SESSION_CONFIG);
     }
@@ -833,10 +841,13 @@ mod tests {
         assert_eq!(wp.typ, Some(WEARPACKET_TYPE_WATCH_FACE));
         assert_eq!(wp.id, Some(WP_ID_PREPARE_INSTALL_WATCH_FACE));
 
-        // Mass prepare：type 字节为 08 18 = 24（非 7）
+        // Mass prepare：type 字节应为 08 16 = 22（type=MASS），payload 字段 = 24
         let mass = encode_mass_prepare(&[0x11; 16], 100);
-        assert_eq!(mass[0..2], [0x08, 0x18]); // type=MASS(24)
+        assert_eq!(mass[0..2], [0x08, 0x16]); // type=MASS(22)
         assert_eq!(mass[2..4], [0x10, 0x00]); // id=PREPARE(0)
+        // payload 字段应为 24（oneof）
+        let mass_payload_field = mass[4] >> 3;
+        assert_eq!(mass_payload_field, 24);
         let wp = parse_wear_packet(&mass).unwrap();
         assert_eq!(wp.typ, Some(WEARPACKET_TYPE_MASS));
         assert_eq!(wp.id, Some(WP_ID_MASS_PREPARE));

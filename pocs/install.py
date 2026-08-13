@@ -663,7 +663,7 @@ async def install(address: str, authkey_hex: str, bin_path: str,
                                 except Exception as e:
                                     log(f"install_result 解析失败: {e}")
                             elif wp:
-                                log(f"  手环推送: type={wp.get('type')} id={wp.get('id')}")
+                                log(f"  手环推送: type={wp.get('type')} id={wp.get('id')} body={plain.hex()}")
             if install_ok:
                 break
         await asyncio.sleep(0.05)

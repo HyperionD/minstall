@@ -193,6 +193,10 @@ fn protobuf_body(payload: &[u8], session: &Session) -> Option<Vec<u8>> {
     }
 }
 
+fn hex_str(data: &[u8]) -> String {
+    data.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// 安装表盘：认证后调用（manager 已连 SPP）。on_progress(sent_bytes, total_bytes)。
 pub async fn push(
     manager: &mut Manager,
@@ -252,14 +256,21 @@ pub async fn push(
                 Ok(Err(e)) => return Err(BleError::ConnectFailed(e)),
                 Err(_) => continue, // 无数据，回到循环检查 deadline
             }
-            for (pt, _fseq, payload) in ch.drain_ack().await.map_err(BleError::ConnectFailed)? {
+            for (pt, fseq, payload) in ch.drain_ack().await.map_err(BleError::ConnectFailed)? {
+                eprintln!("[debug] wait_wp({label}) V2帧 pt={pt} seq={fseq} payload({}B)={}", payload.len(), hex_str(&payload[..payload.len().min(24)]));
                 if pt == V2_PACKET_DATA {
-                    if let Some(body) = protobuf_body(&payload, session) {
-                        if let Some(wp) = parse_wear_packet(&body) {
-                            if predicate(&wp) {
-                                return Ok(wp);
+                    let body = protobuf_body(&payload, session);
+                    match body {
+                        Some(body) => match parse_wear_packet(&body) {
+                            Some(wp) => {
+                                eprintln!("[debug] wait_wp({label}) 收到 WearPacket type={:?} id={:?} status={:?} code={:?} slice={:?} body={}", wp.typ, wp.id, wp.prepare_status, wp.install_result_code, wp.slice_length, hex_str(&body));
+                                if predicate(&wp) {
+                                    return Ok(wp);
+                                }
                             }
-                        }
+                            None => eprintln!("[debug] wait_wp({label}) 无法解析 WearPacket: {}", hex_str(&body)),
+                        },
+                        None => eprintln!("[debug] wait_wp({label}) 非 PROTOBUF/未知 opcode payload: {}", hex_str(&payload)),
                     }
                 }
             }
@@ -342,7 +353,7 @@ pub async fn push(
                 && w.install_result_code.is_some()
         },
         "InstallResult",
-        20,
+        90, // 表盘安装（解压/写入）较慢，等待放宽到 90s
     )
     .await?;
     let code = install.install_result_code.unwrap_or(0);
@@ -355,11 +366,13 @@ pub async fn push(
 }
 
 /// 读取直到收到指定 seq 的 ACK（期间回手环推送的 ACK）。
+/// 必须等到 ACK 才能继续：手环处理慢（真机 ~18KB/s，BATCH=2 每批 ~1.3s），
+/// 超时继续会导致手环丢数据（表盘损坏）。
 async fn drain_until_ack(ch: &mut SppChannel<'_>, seq_target: u8) -> Result<(), BleError> {
-    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(60);
     loop {
         if tokio::time::Instant::now() >= deadline {
-            return Ok(()); // 超时继续，避免死等
+            return Err(BleError::PushFailed { chunk: 0, detail: format!("等待 seq={seq_target} ACK 超时") });
         }
         // 单次读取至多等 200ms（read 无数据时永久阻塞，必须限时）
         match tokio::time::timeout(std::time::Duration::from_millis(200), ch.read_more()).await {
@@ -372,6 +385,7 @@ async fn drain_until_ack(ch: &mut SppChannel<'_>, seq_target: u8) -> Result<(), 
         }
         for (pt, seq, _) in ch.drain_ack().await.map_err(BleError::ConnectFailed)? {
             if pt == V2_PACKET_ACK && seq == seq_target {
+                eprintln!("[minstall] ACK seq={seq} 已收到");
                 return Ok(());
             }
         }

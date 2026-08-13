@@ -53,8 +53,10 @@ pub const WEARPACKET_TYPE_ACCOUNT: u8 = 1;
 pub const WEARPACKET_TYPE_SYSTEM: u8 = 2;
 /// type=WATCH_FACE
 pub const WEARPACKET_TYPE_WATCH_FACE: u8 = 4;
-/// type=MASS（注意：是 24，不是 7！字段编号见协议笔记 5 节）
-pub const WEARPACKET_TYPE_MASS: u8 = 24;
+/// type=MASS（注意：WearPacket.type=22，而 payload oneof 字段 Mass=24 —— 两个不同概念，见 WEARPACKET_PAYLOAD_MASS）
+pub const WEARPACKET_TYPE_MASS: u8 = 22;
+/// WearPacket payload oneof 中 Mass 的字段号 = 24（非 7！字段编号见协议笔记 5 节）
+pub const WEARPACKET_PAYLOAD_MASS: u8 = 24;
 
 /// id=GET_INSTALLED_LIST
 pub const WP_ID_GET_INSTALLED_LIST: u8 = 0;
@@ -96,9 +98,10 @@ mod tests {
     }
 
     #[test]
-    fn wearpacket_mass_type_is_24_not_7() {
-        // 协议笔记 5 节明确：Mass=24（不是 7），防混用
-        assert_eq!(WEARPACKET_TYPE_MASS, 24);
+    fn wearpacket_mass_type_and_payload_field() {
+        // 协议笔记 5 节明确：type=MASS(22)，payload oneof 字段 Mass=24（不是 7），防混用
+        assert_eq!(WEARPACKET_TYPE_MASS, 22);
+        assert_eq!(WEARPACKET_PAYLOAD_MASS, 24);
     }
 
     #[test]

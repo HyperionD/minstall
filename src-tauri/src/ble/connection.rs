@@ -124,28 +124,12 @@ impl Manager {
         // POC 时序：Connect() 后 sleep(2) 再 ConnectProfile（等 BR/EDR 连接收敛，避免 br-connection-busy）
         tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
 
-        // 6) ConnectProfile（POC 笔记提到 br-connection-busy 连接进行中，重试几次）
-        let mut last_err = "".to_string();
-        for attempt in 0..3 {
-            if attempt > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            }
-            match device
-                .connect_profile(&Uuid::from_u128(SPP_UUID_U128))
-                .await
-            {
-                Ok(()) => {
-                    last_err.clear();
-                    break;
-                }
-                Err(e) => {
-                    last_err = e.to_string();
-                    eprintln!("[minstall] ConnectProfile 第 {} 次尝试失败: {}", attempt + 1, last_err);
-                }
-            }
-        }
-        if !last_err.is_empty() {
-            return Err(BleError::ConnectFailed(format!("ConnectProfile 失败: {last_err}")));
+        // 6) ConnectProfile：只试 1 次（真机验证：第一次调用即触发连接，返回的错误
+        //    是误导性的——ConnectRequest 会到达。重试（br-connection-create-socket）
+        //    反而可能干扰已建立的 RFCOMM 连接，导致后续无响应）。
+        match device.connect_profile(&Uuid::from_u128(SPP_UUID_U128)).await {
+            Ok(()) => {}
+            Err(e) => eprintln!("[minstall] ConnectProfile 返回错误（忽略，等待 ConnectRequest）: {e}"),
         }
 
         // 6) 等 ConnectRequest（fd）→ accept 为 Stream（需要可变借用 profile）
