@@ -18,11 +18,16 @@ use crate::protocol::auth::Session as AuthSession;
 /// 全局 JavaVM（由 JNI 入口 Java_com_minstall_app_BleRfcomm_initJni 保存）。
 static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
 
+/// 供 scanner_android 等模块复用 JavaVM。
+pub fn java_vm_ref() -> Option<&'static JavaVM> {
+    JAVA_VM.get()
+}
+
 /// 由 Kotlin BleRfcomm.init() 调用：保存 JavaVM 供后续 JNI 调用。
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub extern "system" fn Java_com_minstall_app_BleRfcomm_initJni(
-    mut env: JNIEnv,
+    env: JNIEnv,
     _: JClass,
 ) {
     if let Ok(vm) = env.get_java_vm() {
