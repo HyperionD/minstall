@@ -25,12 +25,19 @@
 - START_SESSION → PhoneNonce → WatchNonce 流程在 SPP 上正常推进，但卡在 WatchNonce 响应异常（`0801101a1a021804`）
 
 ### 8 月 12 日下午：WearPacket 协议破解 + 认证/安装全通
-
 - **破解 `0801101a1a021804`**：用 astrobox 的 proto 编译解析，确认它是 **WearPacket 协议**的 `error_code=NO_BOUND（未绑定）`——不是 Gadgetbridge 的 Command 协议！
 - **发现手环绑定状态是认证前提**：手环恢复出厂/解绑 → 认证返回 NO_BOUND；重新绑定并提取新 authkey 后认证成功
 - **配对方式修正**：手环配对需 **DisplayYesNo agent**（NoInputNoOutput 无法响应"请在手机上确认配对"）
 - **SPP 认证完整跑通**：PhoneNonce → WatchNonce(61B) → HMAC 验证 → AuthStep3 → subtype=27
 - **表盘安装完整跑通**：WatchFace PREPARE → Mass PREPARE → MASS 分片上传 → **InstallResult code=3（已安装）**，表盘出现在手环列表
+
+### 8 月 13 日：Task 16 收尾 + Linux UI 修复 + Android 版移植
+
+- **Task 16 真机验收全项通过**（扫描/认证/安装/错误路径/中断）；修复 4 个真机 bug：ConnectProfile 错误误判、V2Accumulator 双重消费、WearPacket Mass type=22、MASS 必须等 ACK
+- **安装确认可靠性调查**：POC 与 Rust 发送字节逐帧一致，但手环推 InstallResult（id=5）不可靠（随时间/存储状态变化，POC 也失败）→ 采用「InstallResult 快速 + GET_INSTALLED_LIST 兜底」双通道；同时修复上传后 seq 未更新 bug
+- **Tauri 白屏根因**：Node 17+ localhost→IPv6 `::1`，Vite 只监听 `::1`，WebKitGTK 用 IPv4 连接失败 → 强制 `vite host=127.0.0.1`
+- **UI 改进**：安装后留在安装页（保持认证状态）+ 文件选择 + 存储显示
+- **Android 版移植**（详见 `android-port-notes.md`）：传输抽象层（tokio trait）→ 平台条件编译 → Kotlin RFCOMM + JNI fd 桥 → 蓝牙扫描 → APK 构建成功。核心结论：**协议层纯 Rust 可 100% 复用，仅连接层需按平台重写**
 
 ## 3. 关键技术发现（按重要性）
 
@@ -107,6 +114,7 @@
 ## 7. 遗留问题与下一步
 
 - **POC 脚本**：`pocs/{common,scan,auth,spp_fast,install}.py` 可用；`install.py` 含完整安装流程
-- **阶段 2**（Task 10-16）：Tauri 2.x（Rust SPP + React 前端）三屏向导：连接页/安装页/结果页
-- **协议常量**将集中于 Rust `consts.rs`，值取自协议笔记
-- 注意：阶段 1 测试用的 authkey / 手环绑定状态需在正式使用时由用户提供
+- **阶段 2（Linux GUI）**：Tauri 2.x 应用已完成真机验证（Task 16 全项通过，2026-08-13）；安装确认用「InstallResult + 列表查询」双通道
+- **阶段 3（Android 版）**：进行中（2026-08-13）——传输抽象层已重构，APK 可构建；待 Android 真机联调 + SAF 文件选择，详见 `android-port-notes.md`
+- **协议常量**集中于 Rust `consts.rs`，值取自协议笔记
+- **注意**：authkey 与手环绑定状态关联；重新绑定后需重新提取；手环反复安装会累积存储（覆盖不彻底），建议定期用官方 App 清理

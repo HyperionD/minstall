@@ -4,10 +4,12 @@
 
 - 阶段 1：POC 协议验证（`pocs/`，Python + dbus-fast）—— **已完成（2026-08-12）**
 - 阶段 2：Tauri 跨平台 GUI（`src-tauri/` + `src/`，Rust + React + TypeScript）—— **已完成真机验证（2026-08-13，Task 16 全项通过）**
+- 阶段 3：Android 版（手机端直装，替代 AstroBox）—— 开发中（2026-08-13，APK 可构建，待真机联调）
 
 ## 文档
 
 - [`docs/research-summary.md`](docs/research-summary.md) —— 研究历程与结论总结（人读）
+- [`docs/android-port-notes.md`](docs/android-port-notes.md) —— Android 版移植笔记（架构/环境/踩坑）
 - [`docs/protocol-notes.md`](docs/protocol-notes.md) —— 协议技术细节（真机验证数据）
 
 ## 技术路线（真机验证结论）
