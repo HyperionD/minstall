@@ -1,48 +1,145 @@
 //! Android 版蓝牙连接层（JNI 桥到 Kotlin RFCOMM）。
 //!
-//! 架构：Kotlin 负责 RFCOMM socket 连接，通过 JNI 把 fd 传给 Rust，
-//! Rust 用 tokio AsyncFd 包装成 AsyncRead/AsyncWrite，复用协议层。
-//!
-//! 当前为骨架：连接层逐步实现（先保证 APK 可编译，再接入 JNI）。
+//! 架构：Kotlin `BleRfcomm.connect(addr)` 创建 RFCOMM socket 并返回底层 fd；
+//! Rust 通过 JNI 调用，用 fd 包装成 tokio AsyncFd（AsyncRead/AsyncWrite），
+//! 复用 Linux 版协议层（认证/安装/列表确认/存储查询）。
 
-use tokio::io::{AsyncRead, AsyncWrite};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::sync::OnceLock;
+
+use jni::objects::{JClass, JValue};
+use jni::{JNIEnv, JavaVM};
+use tokio::io::unix::AsyncFd;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use super::errors::BleError;
 use crate::protocol::auth::Session as AuthSession;
 
-/// Android 字节流（JNI fd → tokio）。连接后由 connect 填充。
-pub struct AndroidStream;
+/// 全局 JavaVM（由 JNI 入口 Java_com_minstall_app_BleRfcomm_initJni 保存）。
+static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
+
+/// 由 Kotlin BleRfcomm.init() 调用：保存 JavaVM 供后续 JNI 调用。
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_minstall_app_BleRfcomm_initJni(
+    mut env: JNIEnv,
+    _: JClass,
+) {
+    if let Ok(vm) = env.get_java_vm() {
+        let _ = JAVA_VM.set(vm);
+    }
+}
+
+/// Android RFCOMM 字节流：fd → tokio AsyncFd。
+pub struct AndroidStream {
+    inner: AsyncFd<OwnedFd>,
+}
+
+impl AndroidStream {
+    fn from_fd(fd: i32) -> Result<Self, BleError> {
+        if fd < 0 {
+            return Err(BleError::ConnectFailed("Android 蓝牙 fd 无效".into()));
+        }
+        let owned = unsafe { OwnedFd::from_raw_fd(fd) };
+        let afd = AsyncFd::new(owned)
+            .map_err(|e| BleError::ConnectFailed(format!("AsyncFd 包装失败: {e}")))?;
+        Ok(Self { inner: afd })
+    }
+
+    /// JNI 调 Kotlin BleRfcomm.connect(addr)，返回 fd。
+    fn jni_connect(address: &str) -> Result<i32, BleError> {
+        let vm = JAVA_VM
+            .get()
+            .ok_or_else(|| BleError::ConnectFailed("JavaVM 未初始化（BleRfcomm.init 未调用）".into()))?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| BleError::ConnectFailed(format!("JNI attach 失败: {e}")))?;
+        let class = env
+            .find_class("com/minstall/app/BleRfcomm")
+            .map_err(|e| BleError::ConnectFailed(format!("查找 BleRfcomm 失败: {e}")))?;
+        let jaddr = env
+            .new_string(address)
+            .map_err(|e| BleError::ConnectFailed(format!("JNI 字符串失败: {e}")))?;
+        let jaddr_obj: jni::objects::JObject = jaddr.into();
+        let fd = env
+            .call_static_method(
+                class,
+                "connect",
+                "(Ljava/lang/String;)I",
+                &[JValue::Object(&jaddr_obj)],
+            )
+            .map_err(|e| BleError::ConnectFailed(format!("JNI 调 connect 失败: {e}")))?
+            .i()
+            .map_err(|e| BleError::ConnectFailed(format!("JNI 返回值失败: {e}")))?;
+        Ok(fd)
+    }
+}
 
 impl AsyncRead for AndroidStream {
     fn poll_read(
         self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-        _buf: &mut tokio::io::ReadBuf<'_>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        std::task::Poll::Ready(Err(std::io::Error::new(
-            std::io::ErrorKind::NotConnected,
-            "Android 蓝牙流未连接",
-        )))
+        let mut guard = match self.inner.poll_read_ready(cx) {
+            std::task::Poll::Ready(Ok(g)) => g,
+            std::task::Poll::Ready(Err(e)) => return std::task::Poll::Ready(Err(e)),
+            std::task::Poll::Pending => return std::task::Poll::Pending,
+        };
+        let res = guard.try_io(|inner| {
+            let fd = inner.get_ref().as_raw_fd();
+            let n = unsafe { libc::read(fd, buf.initialize_unfilled().as_mut_ptr() as *mut _, buf.remaining()) };
+            if n < 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(n as usize)
+            }
+        });
+        match res {
+            Ok(Ok(n)) => {
+                buf.advance(n);
+                std::task::Poll::Ready(Ok(()))
+            }
+            Ok(Err(e)) => std::task::Poll::Ready(Err(e)),
+            Err(_) => std::task::Poll::Pending, // WouldBlock，等下一次
+        }
     }
 }
 
 impl AsyncWrite for AndroidStream {
     fn poll_write(
         self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-        _buf: &[u8],
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
     ) -> std::task::Poll<std::io::Result<usize>> {
-        std::task::Poll::Ready(Err(std::io::Error::new(
-            std::io::ErrorKind::NotConnected,
-            "Android 蓝牙流未连接",
-        )))
+        let mut guard = match self.inner.poll_write_ready(cx) {
+            std::task::Poll::Ready(Ok(g)) => g,
+            std::task::Poll::Ready(Err(e)) => return std::task::Poll::Ready(Err(e)),
+            std::task::Poll::Pending => return std::task::Poll::Pending,
+        };
+        let res = guard.try_io(|inner| {
+            let fd = inner.get_ref().as_raw_fd();
+            let n = unsafe { libc::write(fd, buf.as_ptr() as *const _, buf.len()) };
+            if n < 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(n as usize)
+            }
+        });
+        match res {
+            Ok(Ok(n)) => std::task::Poll::Ready(Ok(n)),
+            Ok(Err(e)) => std::task::Poll::Ready(Err(e)),
+            Err(_) => std::task::Poll::Pending,
+        }
     }
+
     fn poll_flush(
         self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         std::task::Poll::Ready(Ok(()))
     }
+
     fn poll_shutdown(
         self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
@@ -63,12 +160,12 @@ impl Manager {
         Self { stream: None, session: None, seq: 0 }
     }
 
-    /// 建立 RFCOMM 连接（JNI 桥到 Kotlin）。当前骨架：待实现 JNI。
+    /// 建立 RFCOMM 连接（JNI 调 Kotlin）。需 Android 蓝牙权限（BLUETOOTH_CONNECT）。
     pub async fn connect(&mut self, address: &str) -> Result<(), BleError> {
-        let _ = address;
-        Err(BleError::ConnectFailed(
-            "Android 蓝牙层开发中（JNI 桥待实现）".into(),
-        ))
+        let fd = AndroidStream::jni_connect(address)?;
+        let stream = AndroidStream::from_fd(fd)?;
+        self.stream = Some(stream);
+        Ok(())
     }
 
     pub async fn disconnect(&mut self) {

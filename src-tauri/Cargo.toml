@@ -41,3 +41,8 @@ futures = "0.3"
 # 文件选择对话框：仅桌面端（Android 用原生 SAF，经 Tauri command 暴露）
 tauri-plugin-dialog = "2.7"
 
+# Android：JNI 调 Kotlin RFCOMM + libc 读写 fd
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+libc = "0.2"
+

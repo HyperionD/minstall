@@ -17,6 +17,7 @@ function App() {
   const [screen, setScreen] = useState<Screen>("connect");
   const [devices, setDevices] = useState<Device[]>([]);
   const [selected, setSelected] = useState<Device | null>(null);
+  const [manualMac, setManualMac] = useState("");
   const [authkey, setAuthkey] = useState("");
   const [binPath, setBinPath] = useState("");
   const [storage, setStorage] = useState<StorageInfo | null>(null);
@@ -54,14 +55,15 @@ function App() {
   };
 
   const doConnect = async () => {
-    if (!selected) return;
+    const address = selected?.address ?? manualMac.trim();
+    if (!address) return;
     setError(null);
     setSuccess(null);
     setLogs([]);
     setBusy(true);
     try {
-      await invoke("connect", { address: selected.address });
-      setLogs((prev) => [...prev, `已连接 ${selected.address}（SPP RFCOMM）`]);
+      await invoke("connect", { address });
+      setLogs((prev) => [...prev, `已连接 ${address}（SPP RFCOMM）`]);
       await invoke("authenticate", { authkey });
       setLogs((prev) => [...prev, "认证成功"]);
       // 认证后查询手环存储
@@ -186,6 +188,13 @@ function App() {
               </li>
             ))}
           </ul>
+          <div className="row">
+            <input
+              placeholder="或手动输入 MAC（如 2C:0D:CF:73:D9:95）"
+              value={manualMac}
+              onChange={(e) => setManualMac(e.target.value)}
+            />
+          </div>
           <input
             placeholder="authkey（hex，32 字符 = 16 字节）"
             value={authkey}
@@ -193,7 +202,7 @@ function App() {
           />
           <div className="row">
             <button
-              disabled={!selected || authkey.length === 0 || busy}
+              disabled={(!selected && !manualMac.trim()) || authkey.length === 0 || busy}
               onClick={doConnect}
             >
               连接并认证
