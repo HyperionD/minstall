@@ -193,10 +193,6 @@ fn protobuf_body(payload: &[u8], session: &Session) -> Option<Vec<u8>> {
     }
 }
 
-fn hex_str(data: &[u8]) -> String {
-    data.iter().map(|b| format!("{b:02x}")).collect()
-}
-
 /// 安装表盘：认证后调用（manager 已连 SPP）。on_progress(sent_bytes, total_bytes)。
 pub async fn push(
     manager: &mut Manager,
@@ -256,21 +252,15 @@ pub async fn push(
                 Ok(Err(e)) => return Err(BleError::ConnectFailed(e)),
                 Err(_) => continue, // 无数据，回到循环检查 deadline
             }
-            for (pt, fseq, payload) in ch.drain_ack().await.map_err(BleError::ConnectFailed)? {
-                eprintln!("[debug] wait_wp({label}) V2帧 pt={pt} seq={fseq} payload({}B)={}", payload.len(), hex_str(&payload[..payload.len().min(24)]));
+            for (pt, _fseq, payload) in ch.drain_ack().await.map_err(BleError::ConnectFailed)? {
                 if pt == V2_PACKET_DATA {
                     let body = protobuf_body(&payload, session);
-                    match body {
-                        Some(body) => match parse_wear_packet(&body) {
-                            Some(wp) => {
-                                eprintln!("[debug] wait_wp({label}) 收到 WearPacket type={:?} id={:?} status={:?} code={:?} slice={:?} body={}", wp.typ, wp.id, wp.prepare_status, wp.install_result_code, wp.slice_length, hex_str(&body));
-                                if predicate(&wp) {
-                                    return Ok(wp);
-                                }
+                    if let Some(body) = body {
+                        if let Some(wp) = parse_wear_packet(&body) {
+                            if predicate(&wp) {
+                                return Ok(wp);
                             }
-                            None => eprintln!("[debug] wait_wp({label}) 无法解析 WearPacket: {}", hex_str(&body)),
-                        },
-                        None => eprintln!("[debug] wait_wp({label}) 非 PROTOBUF/未知 opcode payload: {}", hex_str(&payload)),
+                        }
                     }
                 }
             }

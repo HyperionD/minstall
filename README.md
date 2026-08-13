@@ -3,7 +3,7 @@
 小米手环 10 Pro 表盘直装工具（蓝牙直连安装 .bin/.face 表盘，不经过官方 App）。
 
 - 阶段 1：POC 协议验证（`pocs/`，Python + dbus-fast）—— **已完成（2026-08-12）**
-- 阶段 2：Tauri 跨平台 GUI（`src-tauri/` + `src/`，Rust + React + TypeScript）—— 已实现，待真机验证（Task 16）
+- 阶段 2：Tauri 跨平台 GUI（`src-tauri/` + `src/`，Rust + React + TypeScript）—— **已完成真机验证（2026-08-13，Task 16 全项通过）**
 
 ## 文档
 

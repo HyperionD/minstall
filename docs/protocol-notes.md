@@ -162,6 +162,17 @@
 
 > 注：Gadgetbridge/Kodo 的 `Command{type=4/22}` 安装流程（XiaomiWatchfaceService / MiBand9DataUploader）是 Band 9 的 BLE 协议；Band 10 Pro 走 SPP + WearPacket（astrobox 同款），两者 type 编号巧合重叠但消息体不同，勿混用。
 
+### 5.1 Rust 实现真机验证补充（2026-08-13，Task 16）
+
+Tauri 应用（bluer SPP + Rust 协议层）在 Band 10 Pro 真机完整跑通：认证 → PREPARE → MASS 上传 → InstallResult code=2/3，表盘正常显示。过程中确认的实现注意事项：
+
+- **InstallResult 推送时机不稳定**：手环并非总是直接推 `type=4 id=5`。真机观察到有时先推中间通知（`type=4 id=1/2`、`type=23 id=0/17`、`type=2 id=79`），`id=5` 稍后才到（首次安装解压写入 2.4MB 可能超过 90s）；表盘已存在（同 md5）时立即推 `id=5 code=3`（INSTALL_USED）。因此等待 InstallResult 的超时需放宽（当前 90s），且不能把收到其他包当作失败。
+- **MASS 上传必须逐批等 ACK**：手环处理速度约 18KB/s（2.4MB 约 150s）。不等 ACK 就发下一批会导致手环丢数据、表盘损坏（但 V2 层 ACK 仍正常返回，易误判为成功）。BATCH=2 稳定。
+- **ConnectProfile 返回错误不致命**：BlueZ `br-connection-refused` 后 ConnectRequest 仍会到达（连接实际已建立）。重试反而可能干扰已建立的 RFCOMM 连接，只试一次并等待 ConnectRequest。
+- **SPP 读必须限时**：bluer Stream 的 read 无数据时永久阻塞，必须用 timeout 包裹（如 200ms）轮询。
+- **V2Accumulator 的 feed 只累积不解析**：若 feed 内部解析，与 drain 双重消费会导致帧丢失（表现为认证收不到 START_SESSION_RESPONSE 等）。
+- **WearPacket Mass 的 type 与 payload 字段号不同**：type=MASS(22)，payload oneof 字段 Mass=24。用 24 当 type 会导致 Mass PREPARE 无响应。
+
 ## 6. Bin 文件格式（表盘包解析）
 
 （XiaomiFWHelper.parseAsWatchface，待真机确认）

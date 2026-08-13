@@ -1093,14 +1093,16 @@ git commit -m "feat(ui): add three-screen install wizard"
 - Consumes: 完整应用
 - Produces: 手动测试清单全部通过 + README 使用说明。
 
-- [ ] **Step 1: 按清单逐项真机验证**（**待用户配合**：需要手环 + 有效 authkey + 测试 bin）
+- [x] **Step 1: 按清单逐项真机验证**（**待用户配合**：需要手环 + 有效 authkey + 测试 bin）
 
-- [ ] 1. 冷启动扫描 → 发现设备
-- [ ] 2. 输入正确 authkey → 认证成功
-- [ ] 3. 安装合法 bin → 手环出现新表盘
-- [ ] 4. 输入错误 authkey → 明确失败提示
-- [ ] 5. 安装损坏文件 → 前置校验拦截
-- [ ] 6. 推送中途断开蓝牙 → 错误提示 + 可重试
+- [x] 1. 冷启动扫描 → 发现设备
+- [x] 2. 输入正确 authkey → 认证成功
+- [x] 3. 安装合法 bin → 手环出现新表盘
+- [x] 4. 输入错误 authkey → 明确失败提示
+- [x] 5. 安装损坏文件 → 前置校验拦截
+- [x] 6. 推送中途断开蓝牙 → 错误提示 + 可重试
+
+> ✅ 已全部真机验证通过（2026-08-13，authkey fdbde3…2b91）。验证期间修复：ConnectProfile 错误不致命、V2Accumulator 双重消费、Mass type=22、MASS 必须等 ACK。详见 protocol-notes.md 5.1 节。
 
 > 已就绪：手环 2C:0D:CF:73:D9:95 已配对（Paired=yes，Connected=no）；测试 bin `~/下载/forms-watchface/伊布.face`（2492348B，id=167210067，Task 9 同款）；
 > 配对 agent 已集成（DisplayYesNo，提交 35ac542）。待用户提供有效 authkey（32 hex）后逐项验证。
