@@ -34,10 +34,31 @@ impl Default for DeviceInfo {
         Self {
             unknown1: 0,
             phone_api_level: 34.0,
-            phone_name: "PC".to_string(),
+            phone_name: hostname_str(),
             unknown3: 224,
-            region: "CN".to_string(),
+            region: region_str(),
         }
+    }
+}
+
+/// 主机名（与 POC platform.node() 一致；手环可能据此区分客户端）。
+fn hostname_str() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "PC".to_string())
+}
+
+/// 地区码（与 POC 从 LC_ALL/LANG 推导一致，如 zh_CN → CN）。
+fn region_str() -> String {
+    let lang = std::env::var("LC_ALL")
+        .or_else(|_| std::env::var("LANG"))
+        .unwrap_or_default();
+    let parts: Vec<&str> = lang.split('.').next().unwrap_or("").split('_').collect();
+    if parts.len() >= 2 && !parts[1].is_empty() {
+        let p = parts[1];
+        p[..p.len().min(2)].to_uppercase()
+    } else {
+        "CN".to_string()
     }
 }
 
@@ -86,7 +107,8 @@ pub async fn authenticate(
     log_stub("→ V1 Hello");
 
     // 2) START_SESSION_REQUEST（seq 固定 0）
-    ch.write(&build_session_config(1)).await.map_err(BleError::ConnectFailed)?;
+    let sess_frame = build_session_config(1);
+    ch.write(&sess_frame).await.map_err(BleError::ConnectFailed)?;
     log_stub("→ START_SESSION_REQUEST");
     wait_for(
         &mut ch,
@@ -99,7 +121,8 @@ pub async fn authenticate(
     // 3) PhoneNonce（明文，seq=0）
     let phone_nonce = rand_16();
     let cmd = encode_command_phone_nonce(&phone_nonce);
-    ch.write(&build_protobuf_frame(0, &cmd, false, &[])).await.map_err(BleError::ConnectFailed)?;
+    let pn_frame = build_protobuf_frame(0, &cmd, false, &[]);
+    ch.write(&pn_frame).await.map_err(BleError::ConnectFailed)?;
     log_stub(&format!("→ PhoneNonce {}", hex_str(&phone_nonce)));
 
     // 4) 等 WatchNonce（type=1, subtype=26, 含 watchNonce）并验证 HMAC
@@ -148,7 +171,8 @@ pub async fn authenticate(
         &phone_ack(&enc_key, &phone_nonce, &wnonce16),
         &encrypt_v1(&enc_key, &enc_nonce4, 0, &info_bytes),
     );
-    ch.write(&build_protobuf_frame(1, &step3, false, &[])).await.map_err(BleError::ConnectFailed)?;
+    let s3_frame = build_protobuf_frame(1, &step3, false, &[]);
+    ch.write(&s3_frame).await.map_err(BleError::ConnectFailed)?;
     log_stub("→ AuthStep3");
 
     // 6) 等认证完成（type=1, subtype=27 或 5）

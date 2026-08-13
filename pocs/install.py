@@ -500,8 +500,10 @@ async def install(address: str, authkey_hex: str, bin_path: str,
         return None
 
     # ---- 认证（同 spp_fast.py auth 流程）----
+    log(f"TX V1 Hello {SPP_HELLO.hex()}")
     write_blocking(SPP_HELLO)
     log("→ V1 Hello")
+    log(f"TX START_SESSION {build_session_config(OP_START_SESSION_REQUEST, seq=0).hex()}")
     write_blocking(build_session_config(OP_START_SESSION_REQUEST, seq=0))
     log("→ START_SESSION_REQUEST")
     got = await pump(lambda r: r[0] == "frame" and r[1][0] == PT_SESSION_CONFIG
@@ -510,6 +512,7 @@ async def install(address: str, authkey_hex: str, bin_path: str,
         return {"ok": False, "detail": "START_SESSION_RESPONSE 超时", "bytes_sent": 0}
 
     phone_nonce = os.urandom(16)
+    log(f"TX PhoneNonce frame {build_protobuf_frame(0, encode_command_phone_nonce(phone_nonce)).hex()}")
     write_blocking(build_protobuf_frame(0, encode_command_phone_nonce(phone_nonce)))
     log(f"→ PhoneNonce {phone_nonce.hex()}")
     got = await pump(lambda r: r[0] == "plain" and parse_wear_packet(r[1])
@@ -537,6 +540,7 @@ async def install(address: str, authkey_hex: str, bin_path: str,
     step3 = encode_command_auth_step3(
         phone_ack(enc_key, phone_nonce, watch_nonce),
         encrypt_v1(enc_key, enc_nonce4, 0, info_bytes))
+    log(f"TX AuthStep3 frame {build_protobuf_frame(1, step3).hex()}")
     write_blocking(build_protobuf_frame(1, step3))
     log("→ AuthStep3")
     got = await pump(lambda r: r[0] in ("plain", "enc") and parse_command(r[1])
@@ -551,7 +555,9 @@ async def install(address: str, authkey_hex: str, bin_path: str,
 
     def send_enc_wp(wp_bytes: bytes) -> None:
         nonlocal seq
-        write_blocking(build_protobuf_frame(seq, wp_bytes, encrypt=True, key=enc_key))
+        frame = build_protobuf_frame(seq, wp_bytes, encrypt=True, key=enc_key)
+        log(f"TX send_enc_wp seq={seq} frame({len(frame)}B)={frame.hex()}")
+        write_blocking(frame)
         seq = (seq + 1) & 0xFF
 
     # 1) WatchFace PrepareInstall
@@ -587,7 +593,7 @@ async def install(address: str, authkey_hex: str, bin_path: str,
     #    astrobox 参考：batch_limit = tx_window(3) * backlog_multiplier ≈ 18；此处取 8 保守
     frames, total, with_crc = build_mass_frames(data, slice_length)
     data_seq = seq  # 从当前 seq 连续
-    BATCH = 2  # 真机验证：>2 时手环断连，2 稳定
+    BATCH = 2  # 恢复基线
 
     async def drain_until(seq_target: int, timeout: float) -> None:
         """读取直到收到 seq_target 的 ACK（期间回手环推送的 ACK）。"""
@@ -613,7 +619,10 @@ async def install(address: str, authkey_hex: str, bin_path: str,
         # 发一批
         batch_end = min(idx + BATCH, total)
         for j in range(idx, batch_end):
-            write_blocking(encode_v2_frame(PT_DATA, data_seq, frames[j]))
+            f = encode_v2_frame(PT_DATA, data_seq, frames[j])
+            if j < 2 or j >= total - 2:
+                log(f"TX MASS帧 idx={j} seq={data_seq} frame({len(f)}B)前12B={f.hex()[:24]}")
+            write_blocking(f)
             data_seq = (data_seq + 1) & 0xFF
         # 等这批最后一块的 ACK（超时则继续，避免死等）
         last_seq = (data_seq - 1) & 0xFF
@@ -636,6 +645,7 @@ async def install(address: str, authkey_hex: str, bin_path: str,
         if d:
             for f in acc.feed(d):
                 pt, seq, payload = f
+                log(f"RX帧 pt={pt} seq={seq} payload({len(payload)}B)={payload.hex()}")
                 if pt == PT_DATA:
                     try:
                         os.write(fd, build_ack_frame(seq))

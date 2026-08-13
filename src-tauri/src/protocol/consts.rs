@@ -76,8 +76,10 @@ pub const MASS_DATA_TYPE: u8 = 16;
 pub const MASS_FRAME_OVERHEAD: usize = 6;
 /// 默认分片长度：协议上由设备 prepare_response.expected_slice_length 给出（真机返回 12288），此处为初始值，运行时以设备返回为准
 pub const DEFAULT_SLICE_LENGTH: usize = 12288;
-/// 批量窗口：真机验证 BATCH=2 稳定，>2 手环断连（手环 SessionConfig TX_WIN=3）
-pub const MASS_BATCH: usize = 2;
+/// 批量窗口：真机验证 BATCH=2 稳定但慢（140s/2.4MB）；
+/// 大 BATCH（18）快（~30s）且不丢数据（逐批等 ACK），但手环可能不推 InstallResult，
+/// 需依赖表盘列表查询兑底确认。默认 18（可用 MINSTALL_MASS_BATCH 覆盖）。
+pub const MASS_BATCH: usize = 18;
 
 // ---- 安装结果码（协议笔记 5 节）----
 /// code=2：SUCCESS

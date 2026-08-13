@@ -309,31 +309,53 @@ pub async fn push(
     let slice_length = wp.slice_length.unwrap_or(DEFAULT_SLICE_LENGTH);
     eprintln!("[minstall] expected_slice_length={slice_length}");
 
-    // 3) MASS 分片上传（channel=2 Mass, op=1 Write）——BATCH=2（真机验证：>2 手环断连）
+    // 3) MASS 分片上传（channel=2 Mass, op=1 Write）
+    //    批量窗口：默认 MASS_BATCH（18，快传 ~30s）；逐批等 ACK 保证数据完整。
+    //    可通过环境变量 MINSTALL_MASS_BATCH 覆盖（诊断用）。
+    let batch = std::env::var("MINSTALL_MASS_BATCH")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|b| *b >= 1)
+        .unwrap_or(MASS_BATCH);
+    eprintln!("[minstall] MASS batch={batch}");
     let (frames, total, with_crc) = build_mass_frames(&data, slice_length);
     let data_seq_start = seq;
     let mut data_seq = data_seq_start;
     let mut idx = 0usize;
     let total_bytes = data.len();
+    let t_upload = std::time::Instant::now();
+    let mut ack_waits: Vec<std::time::Duration> = Vec::new();
 
     while idx < total {
-        let batch_end = (idx + MASS_BATCH).min(total);
+        let batch_end = (idx + batch).min(total);
         for j in idx..batch_end {
             let frame = encode_v2_frame(V2_PACKET_DATA, data_seq, &frames[j]);
             ch.write(&frame).await.map_err(|e| BleError::PushFailed { chunk: j, detail: e })?;
             data_seq = data_seq.wrapping_add(1);
         }
-        // 等这批最后一块的 ACK（超时则继续，避免死等）
+        // 等这批最后一块的 ACK（必须等到，否则手环丢数据）
         let last_seq = data_seq.wrapping_sub(1);
+        let t_ack = std::time::Instant::now();
         drain_until_ack(&mut ch, last_seq).await?;
+        ack_waits.push(t_ack.elapsed());
         idx = batch_end;
         let sent = (with_crc.len() * idx / total).min(total_bytes);
         on_progress(sent, total_bytes);
-        eprintln!("[minstall] MASS {idx}/{total} ({sent}B)");
+        eprintln!("[minstall] MASS {idx}/{total} ({sent}B) ack_wait={:?}", t_ack.elapsed());
     }
-    eprintln!("[minstall] MASS 上传完成 {total} 块");
+    eprintln!("[minstall] MASS 上传完成 {total} 块 耗时 {:?}", t_upload.elapsed());
+    let avg_wait = if ack_waits.is_empty() {
+        0.0
+    } else {
+        ack_waits.iter().map(|d| d.as_secs_f64()).sum::<f64>() / ack_waits.len() as f64
+    };
+    eprintln!("[minstall] 平均每批 ACK 等待 {avg_wait:.3}s（共 {} 批）", ack_waits.len());
+    // 关键：上传后 seq 必须更新到 data_seq（后续查询用）。否则查询帧 seq 与 MASS 冲突，手环不响应。
+    seq = data_seq;
 
-    // 4) 等手环推送 InstallResult（WatchFace{install_result{id, code}}，code 2/3 成功）
+    // 4) 确认安装结果：优先等手环推送 InstallResult（id=5，code 2/3 成功）；
+    //    手环经常不推（真机验证：上传完成后有时只推中间通知），此时主动查询
+    //    GET_INSTALLED_LIST 确认目标表盘 id 是否已出现在列表（可靠兑底）。
     let install = wait_wp(
         &mut ch,
         session,
@@ -343,15 +365,83 @@ pub async fn push(
                 && w.install_result_code.is_some()
         },
         "InstallResult",
-        90, // 表盘安装（解压/写入）较慢，等待放宽到 90s
+        30, // 短等待；手环不推则由下方列表查询兑底
     )
-    .await?;
-    let code = install.install_result_code.unwrap_or(0);
-    if code == INSTALL_RESULT_SUCCESS || code == INSTALL_RESULT_USED {
-        eprintln!("[minstall] ★ InstallResult code={code}（2=SUCCESS, 3=INSTALL_USED）");
+    .await;
+    let install = match install {
+        Ok(wp) => Some(wp),
+        Err(_) => None,
+    };
+    if let Some(wp) = &install {
+        let code = wp.install_result_code.unwrap_or(0);
+        if code == INSTALL_RESULT_SUCCESS || code == INSTALL_RESULT_USED {
+            eprintln!("[minstall] ★ InstallResult code={code}（2=SUCCESS, 3=INSTALL_USED）");
+            return Ok(());
+        }
+        eprintln!("[minstall] InstallResult code={code}（非成功），继续查列表确认");
+    } else {
+        eprintln!("[minstall] InstallResult 等待超时，主动查询表盘列表确认...");
+    }
+    let wp_id = parse_watchface_id(&data)?;
+    let mut found = false;
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(300);
+    let mut attempt = 0;
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        attempt += 1;
+        let ids = query_installed_ids(&mut ch, session, &mut seq).await;
+        eprintln!("[minstall] 列表查询第 {attempt} 次：{} 个表盘", ids.len());
+        if ids.iter().any(|id| id == &wp_id) {
+            eprintln!("[minstall] ★ 表盘列表确认：{wp_id} 已安装");
+            found = true;
+            break;
+        }
+        eprintln!("[minstall] 列表未见 {wp_id}，手环可能仍在安装，20s 后重试...");
+        tokio::time::sleep(tokio::time::Duration::from_secs(20)).await;
+    }
+    if found {
         Ok(())
     } else {
-        Err(BleError::PushFailed { chunk: 0, detail: format!("InstallResult code={code}（0=VERIFY_FAILED, 1=INSTALL_FAILED）") })
+        Err(BleError::PushFailed { chunk: 0, detail: "InstallResult 未收到且表盘列表未见目标表盘，安装可能失败".into() })
+    }
+}
+
+/// 发 GET_INSTALLED_LIST 并解析响应中的表盘 id 列表。
+async fn query_installed_ids(
+    ch: &mut SppChannel<'_>,
+    session: &Session,
+    seq: &mut u8,
+) -> Vec<String> {
+    let frame = build_protobuf_frame(*seq, &encode_get_installed_list(), true, &session.enc_key);
+    *seq = seq.wrapping_add(1);
+    if ch.write(&frame).await.is_err() {
+        return vec![];
+    }
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            return vec![];
+        }
+        match tokio::time::timeout(std::time::Duration::from_millis(200), ch.read_more()).await {
+            Ok(Ok(true)) => {}
+            Ok(Ok(false)) | Ok(Err(_)) => return vec![],
+            Err(_) => continue,
+        }
+        for (pt, _fseq, payload) in ch.drain_ack().await.unwrap_or_default() {
+            if pt != V2_PACKET_DATA {
+                continue;
+            }
+            if let Some(body) = protobuf_body(&payload, session) {
+                if let Some(wp) = parse_wear_packet(&body) {
+                    if wp.typ == Some(WEARPACKET_TYPE_WATCH_FACE) && wp.id == Some(WP_ID_GET_INSTALLED_LIST) {
+                        return parse_watchface_list(&body);
+                    }
+                }
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
     }
 }
 
@@ -373,10 +463,18 @@ async fn drain_until_ack(ch: &mut SppChannel<'_>, seq_target: u8) -> Result<(), 
             Ok(Err(e)) => return Err(BleError::ConnectFailed(e)),
             Err(_) => continue,
         }
-        for (pt, seq, _) in ch.drain_ack().await.map_err(BleError::ConnectFailed)? {
+        let frames = ch.drain_ack().await.map_err(BleError::ConnectFailed)?;
+        // 保留非 ACK 的 Data 帧（如 InstallResult 可能随 ACK 一起到达），
+        // 匹配到目标 ACK 时重新塞回累积器供后续 wait_wp 读取——否则会被消费丢弃。
+        let mut keep: Vec<(u8, u8, Vec<u8>)> = Vec::new();
+        for (pt, seq, payload) in frames {
             if pt == V2_PACKET_ACK && seq == seq_target {
+                ch.acc.requeue(&keep);
                 eprintln!("[minstall] ACK seq={seq} 已收到");
                 return Ok(());
+            }
+            if pt == V2_PACKET_DATA {
+                keep.push((pt, seq, payload));
             }
         }
         tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;

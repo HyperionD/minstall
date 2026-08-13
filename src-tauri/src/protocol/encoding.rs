@@ -85,6 +85,19 @@ impl V2Accumulator {
         Self { buf: Vec::new() }
     }
 
+    /// 把已解析的帧重新编码塞回缓冲开头（供 drain_until_ack 保留非 ACK 帧给后续 wait 使用）。
+    pub fn requeue(&mut self, frames: &[(u8, u8, Vec<u8>)]) {
+        if frames.is_empty() {
+            return;
+        }
+        let mut bytes = Vec::new();
+        for (pt, seq, payload) in frames {
+            bytes.extend_from_slice(&encode_v2_frame(*pt, *seq, payload));
+        }
+        bytes.extend_from_slice(&self.buf);
+        self.buf = bytes;
+    }
+
     pub fn feed(&mut self, data: &[u8]) {
         // 只累积不解析：帧由 drain() 统一提取（read_more → drain_ack 两次调用，
         // 若 feed 内部解析会双重消费导致帧丢失 —— 真机验证发现的 bug）。
@@ -440,6 +453,62 @@ pub struct WearPacket {
     pub prepare_status: Option<u8>,
     pub slice_length: Option<usize>,
     pub install_result_code: Option<u8>,
+}
+
+/// WatchFace GET_INSTALLED_LIST 请求（type=4, id=0，无 payload——不传 payload 字段！）。
+pub fn encode_get_installed_list() -> Vec<u8> {
+    let mut out = field_varint(1, WEARPACKET_TYPE_WATCH_FACE as u64);
+    out.extend_from_slice(&field_varint(2, WP_ID_GET_INSTALLED_LIST as u64));
+    out
+}
+
+/// 从 GET_INSTALLED_LIST 响应提取表盘 id 列表。
+/// 实际结构（真机验证）：WatchFace payload(field 6) → face 列表容器(field 1)
+/// → 单个表盘条目(field 1) → id(field 1)。
+pub fn parse_watchface_list(data: &[u8]) -> Vec<String> {
+    let fields = match parse_proto_fields(data) {
+        Ok(f) => f,
+        Err(_) => return vec![],
+    };
+    let mut ids = Vec::new();
+    for (num, val) in &fields {
+        if *num != 6 {
+            continue;
+        }
+        if let ProtoVal::Bytes(b) = val {
+            if let Ok(wf) = parse_proto_fields(b) {
+                for (wn, wv) in &wf {
+                    if *wn != 1 {
+                        continue;
+                    }
+                    // 容器：内含多个表盘条目
+                    if let ProtoVal::Bytes(container) = wv {
+                        if let Ok(cf) = parse_proto_fields(container) {
+                            for (cn, cv) in &cf {
+                                if *cn != 1 {
+                                    continue;
+                                }
+                                if let ProtoVal::Bytes(entry) = cv {
+                                    if let Ok(ef) = parse_proto_fields(entry) {
+                                        for (en, ev) in &ef {
+                                            if *en == 1 {
+                                                if let ProtoVal::Bytes(idb) = ev {
+                                                    if let Ok(s) = String::from_utf8(idb.clone()) {
+                                                        ids.push(s);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ids
 }
 
 pub fn parse_wear_packet(data: &[u8]) -> Option<WearPacket> {
