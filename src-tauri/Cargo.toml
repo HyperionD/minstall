@@ -24,9 +24,6 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# 协议走经典蓝牙 SPP（RFCOMM ch5），见 docs/protocol-notes.md 4.3/4.5 节
-bluer = { version = "0.17", features = ["bluetoothd", "rfcomm"] }
-futures = "0.3"
 # 认证/加密原语（协议笔记 4.4/4.5 节：AES-128-CTR/CCM + HMAC-SHA256）
 aes = "0.8"
 ctr = "0.9"
@@ -35,5 +32,12 @@ hmac = "0.12"
 sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "io-util"] }
 thiserror = "2"
-tauri-plugin-dialog = "2.7.2"
+
+# Linux：经典蓝牙 SPP（RFCOMM ch5）走 BlueZ（bluer），见 docs/protocol-notes.md 4.3/4.5 节。
+# Android：蓝牙层在 Kotlin（JNI 桥），Rust 侧不依赖 BlueZ。
+[target.'cfg(target_os = "linux")'.dependencies]
+bluer = { version = "0.17", features = ["bluetoothd", "rfcomm"] }
+futures = "0.3"
+# 文件选择对话框：仅桌面端（Android 用原生 SAF，经 Tauri command 暴露）
+tauri-plugin-dialog = "2.7"
 

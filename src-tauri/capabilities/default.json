@@ -9,5 +9,6 @@
     "core:default",
     "opener:default",
     "dialog:default"
-  ]
+  ],
+  "platforms": ["linux", "macOS", "windows"]
 }
