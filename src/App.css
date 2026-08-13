@@ -150,3 +150,24 @@ button {
     border-color: #444;
   }
 }
+
+/* 存储信息条 */
+.storage {
+  margin: 10px 0;
+  padding: 8px 10px;
+  background: #e8f4fd;
+  border: 1px solid #9cc9e8;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.storage button {
+  margin-left: 10px;
+  padding: 2px 10px;
+  font-size: 12px;
+}
+@media (prefers-color-scheme: dark) {
+  .storage {
+    background: #1d2a35;
+    border-color: #2f4a5e;
+  }
+}

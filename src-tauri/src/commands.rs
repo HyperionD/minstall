@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex;
 
@@ -15,6 +16,14 @@ pub type SharedManager = Arc<Mutex<Manager>>;
 
 pub fn shared_manager() -> SharedManager {
     Arc::new(Mutex::new(Manager::new()))
+}
+
+/// 手环存储信息（供前端显示）。
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageInfo {
+    pub used: u64,
+    pub total: u64,
 }
 
 #[tauri::command]
@@ -41,8 +50,23 @@ pub async fn authenticate(state: State<'_, SharedManager>, authkey: String) -> R
     let session = auth::authenticate(&mut mgr, &authkey, None)
         .await
         .map_err(|e| e.to_string())?;
+    // 认证后 seq 从 2 起（0=PhoneNonce, 1=AuthStep3），供后续发送复用
+    mgr.advance_seq(session.seq);
     mgr.set_session(session);
     Ok(())
+}
+
+/// 查询手环存储使用（需已连接并认证）。
+#[tauri::command]
+pub async fn get_storage_info(
+    state: State<'_, SharedManager>,
+) -> Result<StorageInfo, String> {
+    let mut mgr = state.inner().lock().await;
+    let session = mgr.session().map_err(|e| e.to_string())?;
+    let (used, total) = watchface::query_storage(&mut mgr, &session)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(StorageInfo { used, total })
 }
 
 #[tauri::command]

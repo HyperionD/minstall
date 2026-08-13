@@ -20,6 +20,8 @@ use crate::protocol::auth::Session as AuthSession;
 pub struct Manager {
     stream: Option<bluer::rfcomm::Stream>,
     session: Option<AuthSession>,
+    /// 会话内下一个可用的发送 seq（认证后从 2 起；跨 command 连续，避免与已发帧冲突）
+    seq: u8,
     bluer_session: Option<Session>,
     agent: Option<AgentHandle>,
     adapter: Option<Adapter>,
@@ -31,11 +33,22 @@ impl Manager {
         Self {
             stream: None,
             session: None,
+            seq: 0,
             bluer_session: None,
             agent: None,
             adapter: None,
             profile: None,
         }
+    }
+
+    /// 当前可用 seq（未认证时为 0）。
+    pub fn seq(&self) -> u8 {
+        self.seq
+    }
+
+    /// 设置/推进 seq（发送帧后调用，wrapping）。
+    pub fn advance_seq(&mut self, next: u8) {
+        self.seq = next;
     }
 
     /// 建立 SPP 连接：配对（如需）→ 建链 → BlueZ Profile 连接。

@@ -211,9 +211,9 @@ pub async fn push(
         data.len()
     );
 
+    let mut seq = manager.seq();
     let stream = manager.stream_mut()?;
     let mut ch = SppChannel::new(stream);
-    let mut seq = session.seq;
 
     // 发送加密 WearPacket 帧
     async fn send_enc(
@@ -401,6 +401,9 @@ pub async fn push(
         eprintln!("[minstall] 列表未见 {wp_id}，手环可能仍在安装，20s 后重试...");
         tokio::time::sleep(tokio::time::Duration::from_secs(20)).await;
     }
+    // 写回会话 seq（供后续查询/安装复用，避免 seq 冲突）；先释放 ch 对 stream 的借用
+    drop(ch);
+    manager.advance_seq(seq);
     if found {
         Ok(())
     } else {
@@ -443,6 +446,80 @@ async fn query_installed_ids(
         }
         tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
     }
+}
+
+/// 查询手环存储使用（GET_STORAGE_INFO）。返回 (used_bytes, total_bytes)。
+pub async fn query_storage(manager: &mut Manager, session: &Session) -> Result<(u64, u64), BleError> {
+    let mut seq = manager.seq();
+    let stream = manager.stream_mut()?;
+    let mut ch = SppChannel::new(stream);
+
+    // GET_STORAGE_INFO: WearPacket{type=SYSTEM(2), id=62}，无 payload
+    let pkt = {
+        let mut out = field_varint(1, WEARPACKET_TYPE_SYSTEM as u64);
+        out.extend_from_slice(&field_varint(2, WP_ID_GET_STORAGE_INFO as u64));
+        out
+    };
+    let frame = build_protobuf_frame(seq, &pkt, true, &session.enc_key);
+    seq = seq.wrapping_add(1);
+    ch.write(&frame).await.map_err(BleError::ConnectFailed)?;
+
+    // 等响应：WearPacket{type=2, id=62, System{storage_info=44{used=1, total=2}}}
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(15);
+    let mut result: Option<(u64, u64)> = None;
+    while result.is_none() {
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        match tokio::time::timeout(std::time::Duration::from_millis(200), ch.read_more()).await {
+            Ok(Ok(true)) => {}
+            Ok(Ok(false)) => break,
+            Ok(Err(e)) => return Err(BleError::ConnectFailed(e)),
+            Err(_) => continue,
+        }
+        for (pt, _fseq, payload) in ch.drain_ack().await.map_err(BleError::ConnectFailed)? {
+            if pt != V2_PACKET_DATA {
+                continue;
+            }
+            if let Some(body) = protobuf_body(&payload, session) {
+                result = parse_storage_info(&body);
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+    }
+    drop(ch);
+    manager.advance_seq(seq);
+    result.ok_or_else(|| BleError::PushFailed { chunk: 0, detail: "存储查询超时或响应异常".into() })
+}
+
+/// 解析存储响应：WearPacket{type=2, id=62} → System(field 4) → storage_info(field 44) → {used=1, total=2}。
+fn parse_storage_info(body: &[u8]) -> Option<(u64, u64)> {
+    let fields = parse_proto_fields(body).ok()?;
+    for (num, val) in &fields {
+        if *num == 4 {
+            if let ProtoVal::Bytes(b) = val {
+                let sys = parse_proto_fields(b).ok()?;
+                for (sn, sv) in &sys {
+                    if *sn == 44 {
+                        if let ProtoVal::Bytes(si) = sv {
+                            let info = parse_proto_fields(si).ok()?;
+                            let mut used: u64 = 0;
+                            let mut total: u64 = 0;
+                            for (in_, iv) in &info {
+                                match (in_, iv) {
+                                    (1, ProtoVal::Varint(v)) => used = *v,
+                                    (2, ProtoVal::Varint(v)) => total = *v,
+                                    _ => {}
+                                }
+                            }
+                            return Some((used, total));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// 读取直到收到指定 seq 的 ACK（期间回手环推送的 ACK）。

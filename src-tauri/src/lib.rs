@@ -9,12 +9,14 @@ pub mod protocol;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(commands::shared_manager())
         .invoke_handler(tauri::generate_handler![
             commands::scan_devices,
             commands::connect,
             commands::disconnect,
             commands::authenticate,
+            commands::get_storage_info,
             commands::install_watchface,
         ])
         .run(tauri::generate_context!())

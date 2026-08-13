@@ -1,11 +1,17 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 
 type Device = { name: string; address: string; rssi: number };
 type Progress = { sent: number; total: number };
+type StorageInfo = { used: number; total: number };
 
 type Screen = "connect" | "install" | "result";
+
+function fmtMB(bytes: number): string {
+  return (bytes / 1048576).toFixed(2) + " MB";
+}
 
 function App() {
   const [screen, setScreen] = useState<Screen>("connect");
@@ -13,6 +19,7 @@ function App() {
   const [selected, setSelected] = useState<Device | null>(null);
   const [authkey, setAuthkey] = useState("");
   const [binPath, setBinPath] = useState("");
+  const [storage, setStorage] = useState<StorageInfo | null>(null);
   const [progress, setProgress] = useState<Progress>({ sent: 0, total: 0 });
   const [logs, setLogs] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -55,11 +62,53 @@ function App() {
       setLogs((prev) => [...prev, `已连接 ${selected.address}（SPP RFCOMM）`]);
       await invoke("authenticate", { authkey });
       setLogs((prev) => [...prev, "认证成功"]);
+      // 认证后查询手环存储
+      try {
+        const st = await invoke<StorageInfo>("get_storage_info");
+        setStorage(st);
+        setLogs((prev) => [
+          ...prev,
+          `存储: 已用 ${fmtMB(st.used)} / 共 ${fmtMB(st.total)}`,
+        ]);
+      } catch (e) {
+        setLogs((prev) => [...prev, `存储查询失败: ${e}`]);
+      }
       setScreen("install");
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const pickFile = async () => {
+    try {
+      const picked = await open({
+        multiple: false,
+        filters: [
+          { name: "表盘文件", extensions: ["bin", "face"] },
+          { name: "全部文件", extensions: ["*"] },
+        ],
+      });
+      if (typeof picked === "string") {
+        setBinPath(picked);
+        setLogs((prev) => [...prev, `已选择文件: ${picked}`]);
+      }
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const refreshStorage = async () => {
+    try {
+      const st = await invoke<StorageInfo>("get_storage_info");
+      setStorage(st);
+      setLogs((prev) => [
+        ...prev,
+        `存储: 已用 ${fmtMB(st.used)} / 共 ${fmtMB(st.total)}`,
+      ]);
+    } catch (e) {
+      setLogs((prev) => [...prev, `存储查询失败: ${e}`]);
     }
   };
 
@@ -71,6 +120,17 @@ function App() {
     try {
       await invoke("install_watchface", { binPath });
       setLogs((prev) => [...prev, "安装完成"]);
+      // 安装后刷新存储
+      try {
+        const st = await invoke<StorageInfo>("get_storage_info");
+        setStorage(st);
+        setLogs((prev) => [
+          ...prev,
+          `存储: 已用 ${fmtMB(st.used)} / 共 ${fmtMB(st.total)}`,
+        ]);
+      } catch {
+        // 存储刷新失败不影响结果
+      }
       setScreen("result");
     } catch (e) {
       setError(String(e));
@@ -139,11 +199,25 @@ function App() {
 
       {screen === "install" && (
         <section>
-          <input
-            placeholder=".bin / .face 表盘文件路径"
-            value={binPath}
-            onChange={(e) => setBinPath(e.target.value)}
-          />
+          {storage && (
+            <div className="storage">
+              手环存储：已用 {fmtMB(storage.used)} / 共 {fmtMB(storage.total)}
+              （可用 {fmtMB(storage.total - storage.used)}）
+              <button onClick={refreshStorage} disabled={busy}>
+                刷新
+              </button>
+            </div>
+          )}
+          <div className="row">
+            <input
+              placeholder=".bin / .face 表盘文件路径"
+              value={binPath}
+              onChange={(e) => setBinPath(e.target.value)}
+            />
+            <button onClick={pickFile} disabled={busy}>
+              选择文件…
+            </button>
+          </div>
           <div className="row">
             <button disabled={!binPath || busy} onClick={doInstall}>
               {busy ? "安装中…" : "安装"}
@@ -171,6 +245,12 @@ function App() {
           {error && <div className="error">{error}</div>}
           {!error && (
             <div className="success">表盘已推送，请在手环上查看表盘列表。</div>
+          )}
+          {storage && !error && (
+            <div className="storage">
+              手环存储：已用 {fmtMB(storage.used)} / 共 {fmtMB(storage.total)}
+              （可用 {fmtMB(storage.total - storage.used)}）
+            </div>
           )}
           <div className="row">
             <button onClick={() => setScreen("connect")}>返回</button>

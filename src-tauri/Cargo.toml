@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "小米手环 10 Pro 表盘直装工具"
 authors = ["minstall contributors"]
 edition = "2021"
+# 默认运行 GUI 主程序（src/main.rs）；诊断工具用 --bin 显式指定
+default-run = "minstall"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -33,4 +35,5 @@ hmac = "0.12"
 sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "io-util"] }
 thiserror = "2"
+tauri-plugin-dialog = "2.7.2"
 
