@@ -62,11 +62,24 @@ pub async fn get_storage_info(
     state: State<'_, SharedManager>,
 ) -> Result<StorageInfo, String> {
     let mut mgr = state.inner().lock().await;
-    let session = mgr.session().map_err(|e| e.to_string())?;
-    let (used, total) = watchface::query_storage(&mut mgr, &session)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(StorageInfo { used, total })
+    let session = match mgr.session() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[minstall] get_storage_info: 未认证 {e}");
+            return Err(e.to_string());
+        }
+    };
+    eprintln!("[minstall] get_storage_info: 开始查询 (seq={})", mgr.seq());
+    match watchface::query_storage(&mut mgr, &session).await {
+        Ok((used, total)) => {
+            eprintln!("[minstall] get_storage_info: used={used} total={total}");
+            Ok(StorageInfo { used, total })
+        }
+        Err(e) => {
+            eprintln!("[minstall] get_storage_info: 失败 {e}");
+            Err(e.to_string())
+        }
+    }
 }
 
 #[tauri::command]

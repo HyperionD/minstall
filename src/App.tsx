@@ -7,7 +7,7 @@ type Device = { name: string; address: string; rssi: number };
 type Progress = { sent: number; total: number };
 type StorageInfo = { used: number; total: number };
 
-type Screen = "connect" | "install" | "result";
+type Screen = "connect" | "install";
 
 function fmtMB(bytes: number): string {
   return (bytes / 1048576).toFixed(2) + " MB";
@@ -23,6 +23,7 @@ function App() {
   const [progress, setProgress] = useState<Progress>({ sent: 0, total: 0 });
   const [logs, setLogs] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -55,6 +56,7 @@ function App() {
   const doConnect = async () => {
     if (!selected) return;
     setError(null);
+    setSuccess(null);
     setLogs([]);
     setBusy(true);
     try {
@@ -114,6 +116,7 @@ function App() {
 
   const doInstall = async () => {
     setError(null);
+    setSuccess(null);
     setLogs([]);
     setProgress({ sent: 0, total: 0 });
     setBusy(true);
@@ -131,7 +134,8 @@ function App() {
       } catch {
         // 存储刷新失败不影响结果
       }
-      setScreen("result");
+      // 留在安装页，保持认证状态，可继续安装/查存储
+      setSuccess(`✅ 表盘安装成功：${binPath.split("/").pop()}`);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -141,6 +145,7 @@ function App() {
 
   const doDisconnect = async () => {
     setError(null);
+    setSuccess(null);
     try {
       await invoke("disconnect");
       setSelected(null);
@@ -199,6 +204,7 @@ function App() {
 
       {screen === "install" && (
         <section>
+          {success && <div className="success">{success}</div>}
           {storage && (
             <div className="storage">
               手环存储：已用 {fmtMB(storage.used)} / 共 {fmtMB(storage.total)}
@@ -239,26 +245,7 @@ function App() {
         </section>
       )}
 
-      {screen === "result" && (
-        <section>
-          <h2>{error ? "安装失败" : "安装完成"}</h2>
-          {error && <div className="error">{error}</div>}
-          {!error && (
-            <div className="success">表盘已推送，请在手环上查看表盘列表。</div>
-          )}
-          {storage && !error && (
-            <div className="storage">
-              手环存储：已用 {fmtMB(storage.used)} / 共 {fmtMB(storage.total)}
-              （可用 {fmtMB(storage.total - storage.used)}）
-            </div>
-          )}
-          <div className="row">
-            <button onClick={() => setScreen("connect")}>返回</button>
-          </div>
-        </section>
-      )}
-
-      {error && screen !== "result" && <div className="error">{error}</div>}
+      {error && <div className="error">{error}</div>}
     </main>
   );
 }

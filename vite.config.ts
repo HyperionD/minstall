@@ -16,7 +16,9 @@ export default defineConfig(async () => ({
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
+    // 强制 IPv4：Node 17+ 默认 localhost 解析为 IPv6 ::1，而 WebKitGTK webview
+    // 用 IPv4 127.0.0.1 连接 → 连不上 → 窗口白屏。
+    host: host || "127.0.0.1",
     hmr: host
       ? {
           protocol: "ws",
