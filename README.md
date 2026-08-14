@@ -1,81 +1,117 @@
 # minstall
 
-小米手环 10 Pro 表盘直装工具（蓝牙直连安装 .bin/.face 表盘，不经过官方 App）。
+> 小米手环 10 Pro 表盘直装工具 —— 蓝牙直连安装 `.bin` / `.face` 表盘，**不经过官方 App**。
 
-- 阶段 1：POC 协议验证（`pocs/`，Python + dbus-fast）—— **已完成（2026-08-12）**
-- 阶段 2：Tauri 跨平台 GUI（`src-tauri/` + `src/`，Rust + React + TypeScript）—— **已完成真机验证（2026-08-13，Task 16 全项通过）**
-- 阶段 3：Android 版（手机端直装，替代 AstroBox）—— **已完成真机验证（2026-08-14：连接/认证/安装/断开全链路，产品级 UI + 自定义图标）**
+支持 **Linux（Tauri 桌面）** 与 **Android（手机端）**。协议层纯 Rust 复用，连接层按平台实现。
 
-## 文档
+> ⚠️ **免责声明**：本项目通过非官方协议逆向实现，绕过官方 App 直连手环，仅供个人研究/自用。使用风险自负（可能违反厂商服务条款；操作不当可能导致手环异常）。请勿用于商业用途，不建议上架应用商店。
 
-- [`docs/research-summary.md`](docs/research-summary.md) —— 研究历程与结论总结（人读）
-- [`docs/android-port-notes.md`](docs/android-port-notes.md) —— Android 版移植笔记（架构/环境/踩坑）
-- [`docs/protocol-notes.md`](docs/protocol-notes.md) —— 协议技术细节（真机验证数据）
+---
 
-## 技术路线（真机验证结论）
+## ✨ 特性
 
-- Band 10 Pro 的 V2 协议走**经典蓝牙 SPP 通道**（RFCOMM ch5），非 BLE GATT（BLE 5e/5f 写帧无响应）
-- 认证 + 表盘安装完整跑通（V1 Hello → authkey 认证 → WearPacket 协议 → MASS 分片上传）
-- 表盘实际安装成功（InstallResult code=3，手环列表可见）
-- 认证与推送协议为 astrobox 的 **WearPacket 协议**（非 Gadgetbridge 的 Command 协议）
+- 🎯 蓝牙直连，不依赖官方 App（可替代 AstroBox）
+- 📱 双平台：Linux 桌面 + Android 手机
+- 🔑 authkey 自动读取（剪贴板 / 导出日志解析）
+- 📦 安装 `.bin` / `.face` 表盘，进度实时显示
+- 💾 手环存储用量查询
+- 🎨 深色 / 浅色双主题
 
-## 架构
+## 📸 截图
 
-```
-src-tauri/src/
-├── main.rs / lib.rs       # Tauri 入口，注册 commands
-├── commands.rs            # Tauri command 桥接（scan/connect/authenticate/install）
-├── events.rs              # 前端事件名（install:progress）
-├── ble/
-│   ├── scanner.rs         # 设备扫描（bluer，过滤 mi/band/xiaomi）
-│   ├── connection.rs      # SPP 连接管理（RFCOMM ch5）+ 认证会话保存
-│   └── errors.rs          # BleError（thiserror）
-└── protocol/
-    ├── consts.rs          # 协议常量（唯一来源 docs/protocol-notes.md）
-    ├── encoding.rs        # V2 帧 / CRC16 / protobuf / AES-CTR/CCM / HMAC / WearPacket
-    ├── auth.rs            # authkey 认证握手（返回 Session）
-    └── watchface.rs       # bin 解析 + WearPacket 安装 + MASS 分片推送
-```
+（待补充）
 
-## 开发
+---
+
+## 🚀 快速开始（Android 用户）
+
+1. **下载 APK**：从 [Releases](https://github.com/你的仓库/minstall/releases) 下载最新版并安装
+2. **准备 authkey**：
+   - 用官方 App（小米运动健康）绑定手环
+   - 我的 → 关于 → 连续点击界面最上方的 App 图标 → 弹出对话框点「确定」导出日志
+   - 打开 minstall，点「自动检测」自动读取；或从日志 `Download/wearablelog/*.zip` 中手动提取 `"encryptKey"` 字段值（32 位 hex）
+3. **连接**：扫描或输入手环 MAC（如 `2C:0D:CF:73:D9:95`），输入 authkey，点「连接并认证」
+4. **安装**：选择 `.bin` / `.face` 表盘文件 → 点「安装表盘」→ 进度 100% 后到手环确认
+
+### 使用注意事项
+
+- 使用前请**关闭/退出官方 App**（它会占用手环的蓝牙 RFCOMM 通道；minstall 会自动尝试顶掉占用，但建议手动退出更稳定）
+- 手环必须处于**已绑定**状态（未恢复出厂 / 未在 App 内解绑），否则认证返回 NO_BOUND
+- 重新绑定后需重新提取 authkey
+
+---
+
+## 🛠 开发 / 构建
+
+> 完整开发背景、协议细节、平台实现、踩坑记录见 [`DEVELOPMENT.md`](DEVELOPMENT.md)（AI 后续开发必读）。
+
+### 环境要求
+
+| 组件 | 版本 |
+|---|---|
+| Rust | stable（target: `aarch64-linux-android` 等） |
+| Node.js | 18+ |
+| JDK | 17 |
+| Android SDK | platform 36 + build-tools 36 + NDK 27.1 |
+| cargo-ndk | 最新 |
+
+### Linux 桌面
 
 ```bash
-npm install          # 前端依赖（NODE_ENV=production 时需 --include=dev --no-audit）
-cd src-tauri
-cargo test           # 27 个单测（协议 golden 向量 / 帧编解码 / 分块逻辑）
+npm install
+cd src-tauri && cargo test    # 27 个协议单测
 cd ..
-npm run tauri dev    # 开发运行
+npm run tauri dev
 ```
 
-## 使用说明
+### Android APK
 
-### 安装前置条件
+```bash
+export JAVA_HOME=~/path/to/jdk-17
+export ANDROID_HOME=~/Android/Sdk
+npm run tauri android build -- --apk
+# 产物：src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
+```
 
-1. **已绑定手环 + 有效 authkey**：用官方 App（小米运动健康）绑定手环，从手机日志提取 authkey（16 字节 hex，32 字符）；手环恢复出厂 / App 内解绑后 authkey 失效，需重新绑定提取。
-2. **断开手机连接**：使用工具前关闭手机蓝牙或从手机断开手环（蓝牙独占）。
-3. Linux 需 BlueZ（`bluetoothd` 运行中）与 dbus 权限。
+**签名**：release 构建会自动读取 `src-tauri/gen/android/keystore.properties`（含密钥路径/口令）。此文件已被 gitignore，**不要提交**；需自行生成 keystore：
 
-### 操作步骤
+```bash
+keytool -genkeypair -v \
+  -keystore ~/minstall-release.keystore \
+  -alias minstall -keyalg RSA -keysize 2048 -validity 36500 \
+  -storepass <你的口令> -keypass <你的口令>
+# 然后填写 src-tauri/gen/android/keystore.properties
+```
 
-1. **扫描**：点击「扫描设备」，选择列表中的 `Xiaomi Smart Band 10 Pro`。
-2. **认证**：输入 authkey（32 位 hex，可带 `0x` 前缀），点击「连接并认证」。
-   - 若手环此前未与电脑配对，需在手环/系统弹窗确认配对（DisplayYesNo）。
-3. **安装**：选择 `.bin` / `.face` 表盘文件路径，点击「安装」，等待进度完成。
-4. **完成**：手环表盘列表出现新表盘。
+> ⚠️ 密钥请**离线妥善备份**：丢失后用户无法升级已安装的 App。
 
-### 常见错误对照表
+---
 
-| 现象 | 原因 | 处理 |
-|---|---|---|
-| 扫描无设备 | 手环被手机占用 / 蓝牙关闭 | 关闭手机蓝牙，确认手环蓝牙开启 |
-| 认证失败 "watch HMAC 验证失败" | authkey 错误 | 核对 authkey（32 hex 字符） |
-| 认证失败（等待应答超时） | 手环未绑定 / 未配对 | 用官方 App 重新绑定并提取新 authkey；确认手环已配对 |
-| 安装失败 "文件头部 magic 应为 5A A5" | 非表盘 bin | 使用合法 .bin/.face 表盘文件 |
-| 安装失败 "InstallResult code=1" | 表盘与设备不兼容 / 已满 | 更换表盘；查看手环剩余空间 |
-| 推送中断 | 蓝牙断开 | 重新连接后重试（进度事件已按分块上报） |
+## 📖 协议简述（详细见 DEVELOPMENT.md）
 
-## 阶段 1 成果
+- Band 10 Pro 的 V2 协议走 **经典蓝牙 SPP 通道（RFCOMM ch5）**，非 BLE GATT
+- 协议族为 **astrobox 的 WearPacket**（非 Gadgetbridge 的 Command，两者字节兼容但语义不同）
+- 认证：V1 Hello → START_SESSION → authkey 认证（PhoneNonce/WatchNonce/HMAC）
+- 安装：WatchFace PREPARE → Mass PREPARE → MASS 分片上传（BATCH=2）→ InstallResult
 
-- 确认 Band 10 Pro 的 V2 协议走**经典蓝牙 SPP 通道**（RFCOMM ch5），非 BLE GATT
-- 认证 + 表盘安装完整跑通（authkey 认证 → WearPacket 协议 → MASS 分片上传）
-- 表盘实际安装成功（InstallResult code=3，手环列表可见）
+## 🗂 项目结构
+
+```
+src/            React 前端
+src-tauri/src/
+  ble/          蓝牙层（Linux bluer / Android JNI）
+  protocol/     协议层（纯 Rust，双平台复用）
+  commands.rs   Tauri command 桥接
+pocs/           Python POC 脚本
+```
+
+## 📄 License
+
+（待补充 —— 项目当前未选择开源许可证）
+
+---
+
+## 🙏 致谢
+
+- [Gadgetbridge](https://github.com/Freeyourgadget/Gadgetbridge) / [Kodo](https://github.com/kidneyweakx/Kodo)（Band 9 协议参考）
+- [AstroBox](https://github.com/astrobox)（Band 10 Pro WearPacket 协议参考）
