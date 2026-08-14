@@ -1,6 +1,7 @@
 package com.minstall.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -9,12 +10,26 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 
 class MainActivity : TauriActivity() {
+  companion object {
+    /** 供 BleFilePicker（JNI 线程）启动 SAF 选择器用。 */
+    @Volatile
+    var instance: MainActivity? = null
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    instance = this
     AppContext.ctx = applicationContext
     BleRfcomm.init()
     requestBluetoothPermissions()
+  }
+
+  /** SAF 文件选择结果转发给 BleFilePicker（JNI 线程在 latch 上等待）。 */
+  @Deprecated("Deprecated in Java")
+  override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    super.onActivityResult(requestCode, resultCode, data)
+    BleFilePicker.onActivityResult(requestCode, resultCode, data)
   }
 
   /** Android 12+ 需要 BLUETOOTH_CONNECT/SCAN；Android <12 需要位置权限。 */

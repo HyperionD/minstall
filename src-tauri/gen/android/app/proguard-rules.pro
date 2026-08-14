@@ -5,17 +5,11 @@
 # For more details, see
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
-
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
-
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# JNI 桥类：被 Rust native 侧通过字符串引用（loadClass + 静态方法签名）调用，
+# R8 无法静态分析到这些引用，必须显式 keep，否则方法被裁剪导致 NoSuchMethodError。
+# 注意：Kotlin object 的 @JvmStatic 方法用 `public static ** scan(long)` 写法 R8 可能不匹配，
+# 用 { *; } 整体保留最保险。
+-keep class com.minstall.app.BleScan { *; }
+-keep class com.minstall.app.BleRfcomm { *; }
+-keep class com.minstall.app.BleFilePicker { *; }
+-keep class com.minstall.app.AppContext { *; }

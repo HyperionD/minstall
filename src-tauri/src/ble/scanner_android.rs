@@ -38,9 +38,7 @@ fn jni_scan(timeout_secs: u64) -> Result<Vec<DeviceInfo>, BleError> {
     let mut env = vm
         .attach_current_thread()
         .map_err(|e| BleError::ConnectFailed(format!("JNI attach 失败: {e}")))?;
-    let class = env
-        .find_class("com/minstall/app/BleScan")
-        .map_err(|e| BleError::ConnectFailed(format!("查找 BleScan 失败: {e}")))?;
+    let class = crate::ble::connection_android::find_app_class(&mut env, "com/minstall/app/BleScan")?;
     let timeout_ms = (timeout_secs * 1000) as i64;
     let arr = env
         .call_static_method(
