@@ -13,6 +13,16 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// release 签名：读取 keystore.properties（含密钥口令，已被 gitignore，勿提交）；
+// 文件缺失时回退 debug 签名，保证开发构建可用。
+val ksProperties = Properties().apply {
+    val f = file("../keystore.properties")
+    if (f.exists()) {
+        f.inputStream().use { load(it) }
+    }
+}
+val hasReleaseSigning = !ksProperties.getProperty("MINSTALL_STORE_FILE").isNullOrBlank()
+
 android {
     compileSdk = 36
     namespace = "com.minstall.app"
@@ -23,6 +33,16 @@ android {
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(ksProperties.getProperty("MINSTALL_STORE_FILE"))
+                storePassword = ksProperties.getProperty("MINSTALL_STORE_PASSWORD")
+                keyAlias = ksProperties.getProperty("MINSTALL_KEY_ALIAS")
+                keyPassword = ksProperties.getProperty("MINSTALL_KEY_PASSWORD")
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -38,6 +58,9 @@ android {
         }
         getByName("release") {
             isMinifyEnabled = true
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
                     .plus(getDefaultProguardFile("proguard-android-optimize.txt"))

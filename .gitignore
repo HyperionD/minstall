@@ -35,3 +35,8 @@ __pycache__/
 # Project-specific
 .worktrees/
 .superpowers/
+
+# Android 签名（含密钥口令，严禁提交）
+src-tauri/gen/android/keystore.properties
+*.keystore
+*.jks
