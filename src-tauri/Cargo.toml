@@ -1,9 +1,13 @@
 [package]
 name = "minstall"
 version = "0.1.0"
-description = "小米手环 10 Pro 表盘直装工具"
+description = "小米手环 10 Pro 表盘直装工具（蓝牙直连，不经过官方 App）"
 authors = ["minstall contributors"]
 edition = "2021"
+license = "MIT"
+readme = "../README.md"
+repository = "https://github.com/minstall/minstall"
+homepage = "https://github.com/minstall/minstall"
 # 默认运行 GUI 主程序（src/main.rs）；诊断工具用 --bin 显式指定
 default-run = "minstall"
 

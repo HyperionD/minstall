@@ -107,7 +107,7 @@ pocs/           Python POC 脚本
 
 ## 📄 License
 
-（待补充 —— 项目当前未选择开源许可证）
+[MIT](LICENSE) © 2026 minstall contributors
 
 ---
 
