@@ -4,6 +4,9 @@
 //! - Linux：走 BlueZ（bluer），见 protocol-notes.md 4.3/4.5 节
 //! - Android：蓝牙层在 Kotlin（JNI 桥），Rust 侧提供 tokio 字节流实现
 
+#[cfg(target_os = "android")]
+pub mod file_picker_android;
+
 pub mod errors;
 
 #[cfg(target_os = "linux")]
