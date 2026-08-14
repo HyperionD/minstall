@@ -102,7 +102,19 @@ pub async fn install_watchface(
     let session = mgr.session().map_err(|e| e.to_string())?;
     let mut seq = mgr.seq();
     let stream = mgr.stream_mut().map_err(|e| e.to_string())?;
-    let result = watchface::push(stream, &session, &bin_path, &mut seq, |sent, total| {
+    // 读取表盘字节：Android 走 JNI（SAF 持久授权 URI 或路径），Linux 直接 fs::read
+    #[cfg(target_os = "android")]
+    let data = {
+        let name = bin_path.clone();
+        tokio::task::spawn_blocking(move || crate::ble::file_picker_android::read_bytes(&name))
+            .await
+            .map_err(|e| format!("读取表盘任务失败: {e}"))?
+            .map_err(|e| e.to_string())?
+    };
+    #[cfg(not(target_os = "android"))]
+    let data = std::fs::read(&bin_path).map_err(|e| format!("读取表盘文件失败: {e}"))?;
+
+    let result = watchface::push(stream, &session, data, &mut seq, |sent, total| {
         let r = app.emit(
             "install:progress",
             serde_json::json!({ "sent": sent, "total": total }),
@@ -122,4 +134,27 @@ pub async fn pick_watchface_file() -> Result<String, String> {
         .map_err(|e| format!("文件选择任务失败: {e}"))?
         .map_err(|e| e.to_string())?;
     Ok(path)
+}
+
+/// Android authkey 自动读取（剪贴板 + wearablelog 日志）。
+/// 返回状态码："FOUND|<hex>" / "DIR_MISSING" / "NEED_PERMISSION" / "EMPTY"。
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn read_authkey() -> Result<String, String> {
+    let val = tokio::task::spawn_blocking(|| crate::ble::authkey_android::read())
+        .await
+        .map_err(|e| format!("authkey 读取任务失败: {e}"))?
+        .map_err(|e| e.to_string())?;
+    eprintln!("[minstall] read_authkey 返回: '{val}'");
+    Ok(val)
+}
+
+/// 打开系统「所有文件访问」设置页（MANAGE_EXTERNAL_STORAGE，Android 11+）。
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn open_storage_permission_settings() -> Result<(), String> {
+    tokio::task::spawn_blocking(|| crate::ble::authkey_android::open_storage_settings())
+        .await
+        .map_err(|e| format!("打开设置页任务失败: {e}"))?
+        .map_err(|e| e.to_string())
 }

@@ -3,8 +3,6 @@
 //! 流程与帧格式来源 docs/protocol-notes.md 5 节（真机验证，2026-08-12）：
 //! WatchFace PREPARE_INSTALL → Mass PREPARE → MASS 分片上传（BATCH=2）→ 等 InstallResult。
 
-use std::fs;
-
 use crate::ble::errors::BleError;
 use crate::protocol::auth::Session;
 use crate::protocol::consts::*;
@@ -213,17 +211,17 @@ pub enum PushOutcome {
 
 /// 安装表盘：认证后调用（stream 已连 SPP，seq 由调用方维护）。on_progress(sent_bytes, total_bytes)。
 /// S 为传输层（tokio AsyncRead+AsyncWrite）：Linux bluer Stream / Android JNI 桥。
+/// data 为表盘 bin 文件字节（调用方负责读取：Linux fs::read，Android JNI 读 SAF URI）。
 pub async fn push<S>(
     stream: &mut S,
     session: &Session,
-    bin_path: &str,
+    data: Vec<u8>,
     seq_ref: &mut u8,
     on_progress: impl Fn(usize, usize),
 ) -> Result<PushOutcome, BleError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    let data = fs::read(bin_path).map_err(|e| BleError::FileError(e.to_string()))?;
     if data.is_empty() {
         return Err(BleError::FileError("文件为空".into()));
     }

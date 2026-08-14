@@ -33,7 +33,8 @@ async fn main() {
     let session = mgr.session().expect("取会话失败");
     let t1 = Instant::now();
     let mut seq = session.seq;
-    match watchface::push(mgr.stream_mut().expect("连接"), &session, bin_path, &mut seq, |sent, total| {
+    let data = std::fs::read(bin_path).expect("读表盘文件失败");
+    match watchface::push(mgr.stream_mut().expect("连接"), &session, data, &mut seq, |sent, total| {
         eprintln!("[speedtest] 进度: {sent} / {total} 字节");
     })
     .await

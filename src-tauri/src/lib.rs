@@ -22,6 +22,10 @@ pub fn run() {
             commands::install_watchface,
             #[cfg(target_os = "android")]
             commands::pick_watchface_file,
+            #[cfg(target_os = "android")]
+            commands::read_authkey,
+            #[cfg(target_os = "android")]
+            commands::open_storage_permission_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

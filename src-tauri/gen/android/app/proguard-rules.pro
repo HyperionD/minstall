@@ -12,4 +12,5 @@
 -keep class com.minstall.app.BleScan { *; }
 -keep class com.minstall.app.BleRfcomm { *; }
 -keep class com.minstall.app.BleFilePicker { *; }
+-keep class com.minstall.app.AuthkeyReader { *; }
 -keep class com.minstall.app.AppContext { *; }

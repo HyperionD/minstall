@@ -5,6 +5,8 @@
 //! - Android：蓝牙层在 Kotlin（JNI 桥），Rust 侧提供 tokio 字节流实现
 
 #[cfg(target_os = "android")]
+pub mod authkey_android;
+#[cfg(target_os = "android")]
 pub mod file_picker_android;
 
 pub mod errors;
