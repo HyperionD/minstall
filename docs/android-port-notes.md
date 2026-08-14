@@ -129,13 +129,27 @@ APK 产物：`src-tauri/gen/android/app/build/outputs/apk/universal/release/mins
 - Kotlin 蓝牙扫描（startDiscovery + JNI，含已配对设备）
 - 蓝牙权限（Manifest + 运行时申请）
 - 自动解除配对顶掉 RFCOMM 占用方
-- SAF 文件选择（ACTION_OPEN_DOCUMENT → 缓存 → 路径）
+- SAF 文件选择（ACTION_OPEN_DOCUMENT，持久授权 URI，不复制缓存，保留原始文件名）
+- authkey 自动读取（剪贴板 + 自动扫描 Download/wearablelog 日志 zip，解析 encryptKey 字段）
 - **真机全链路验证（2026-08-14）：连接 → 认证 → 安装 → 断开**
-- 产品级 UI（表盘签名元素 + 深色设计系统）+ 自定义图标
+- 产品级 UI（表盘签名元素 + 深色/浅色双主题）+ 自定义图标
+- 连续安装多个表盘（文件选择 latch 每次重建）
 
 **待办**：
-- [ ] 签名正式化（release keystore，替代 debug）
+- [x] 签名正式化（release keystore，替代 debug）
 - [ ] 安装成功后的「已确认」提示可考虑让用户手动确认收尾
+
+## 8. 补充：8-14 Android 版真机联调修复（同日）
+
+- **事件监听被 ACL 拒绝**：capabilities 缺 android.json（无 core:default）→ 进度事件 emit ok 但前端收不到；新增 `src-tauri/capabilities/android.json`（含 core:default，桌面限 linux/macOS/windows）
+- **native 线程 FindClass 失败**：扫描/连接 ClassNotFoundException → 缓存应用 ClassLoader，`find_app_class` 用 loadClass 兜底
+- **R8 裁剪 JNI 桥类**：BleScan/BleRfcomm/BleFilePicker/AuthkeyReader 方法被裁 → proguard keep
+- **BluetoothSocket fd 阻塞模式**：AsyncFd 需非阻塞 fd，阻塞 read 卡死 timeout → 独立阻塞读线程 + mpsc channel
+- **fd 所有权**：Rust 只借用 fd（OwnedFd close 触发 fdsan abort），断开由 Kotlin `BleRfcomm.close()` 关闭
+- **startDiscovery 不含已配对设备**：扫描并入 `adapter.bondedDevices`
+- **RFCOMM 被官方 App 占用**：自动 removeBond + createBond 重新配对顶掉
+- **安装确认等太久**：InstallResult 只等 10s，未收到返回「已传输」由用户手环确认
+- **无法连续安装**：BleFilePicker CountDownLatch 单例耗尽，第二次 await 立即返回 → 每次新建 latch
 
 ## 8. 补充：8-13 Linux 版修复（同日）
 
