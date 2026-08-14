@@ -130,6 +130,24 @@ function App() {
     };
   }, []);
 
+  // 记住上次连接：启动时自动填入 MAC + authkey（免扫描直接连接）
+  useEffect(() => {
+    let cancelled = false;
+    try {
+      const mac = localStorage.getItem("minstall.lastMac");
+      const key = localStorage.getItem("minstall.lastAuthkey");
+      if (!cancelled && mac) {
+        setManualMac(mac);
+        if (key) setAuthkey(key);
+      }
+    } catch {
+      /* 读取失败忽略 */
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     const un = listen<Progress>("install:progress", (e) => {
       setProgress(e.payload);
@@ -182,6 +200,13 @@ function App() {
       setWatchStatus("认证中…");
       await invoke("authenticate", { authkey });
       setLogsAuto((prev) => [...prev, "认证成功"]);
+      // 记住连接：下次免扫描直接填入 MAC + authkey
+      try {
+        localStorage.setItem("minstall.lastMac", address);
+        localStorage.setItem("minstall.lastAuthkey", authkey);
+      } catch {
+        /* 存储失败不影响 */
+      }
       setWatchState("ok");
       setWatchStatus("已认证 · 就绪");
       // 认证后查询手环存储
@@ -340,8 +365,9 @@ function App() {
             <div>
               <h2>连接手环</h2>
               <p className="step-head__hint">
-                使用前请断开手机与手环的连接（蓝牙独占）；若手环未绑定，请先用官方 App
-                绑定并提取 authkey。
+                若手环未绑定，请先用官方 App 绑定并提取 authkey。
+                <br />
+                可点「自动检测」从导出日志读取 authkey，或手动输入 32 位 hex。
               </p>
             </div>
           </div>

@@ -127,7 +127,8 @@ body {
 .app {
   max-width: 560px;
   margin: 0 auto;
-  padding: 20px 16px 48px;
+  /* 顶部避开系统状态栏（Android 全屏 WebView 会与状态栏重叠） */
+  padding: calc(env(safe-area-inset-top, 0px) + 20px) 16px 48px;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -623,8 +624,11 @@ body {
   line-height: 1.65;
   padding: 12px 14px;
   min-height: 96px;
-  max-height: 220px;
+  height: 220px; /* 固定高度确保内部可滚动 */
+  flex-shrink: 0; /* 防止被 .card flex 压缩 */
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   white-space: pre-wrap;
   word-break: break-all;
 }
