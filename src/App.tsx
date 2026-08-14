@@ -87,7 +87,6 @@ function App() {
   const [selected, setSelected] = useState<Device | null>(null);
   const [manualMac, setManualMac] = useState("");
   const [authkey, setAuthkey] = useState("");
-  const [showKey, setShowKey] = useState(false);
   const [binPath, setBinPath] = useState("");
   const [storage, setStorage] = useState<StorageInfo | null>(null);
   const [progress, setProgress] = useState<Progress>({ sent: 0, total: 0 });
@@ -110,6 +109,26 @@ function App() {
       logRef.current.scrollTop = logRef.current.scrollHeight;
     }
   }, [logs]);
+
+  // Android：启动时自动读取 authkey（剪贴板 32-hex；无则静默，可手动点自动检测走 SAF）
+  useEffect(() => {
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    if (!isAndroid) return;
+    let cancelled = false;
+    invoke<string>("read_authkey")
+      .then((val) => {
+        if (!cancelled && val && val.startsWith("FOUND|")) {
+          setAuthkey(val.slice(6));
+          setSuccess("已自动读取 authkey");
+        }
+      })
+      .catch(() => {
+        /* 自动读取失败不打扰用户，可手动输入 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const un = listen<Progress>("install:progress", (e) => {
@@ -388,22 +407,46 @@ function App() {
               <input
                 id="authkey"
                 className="input input--mono"
-                type={showKey ? "text" : "password"}
+                type="text"
                 placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
                 value={authkey}
                 onChange={(e) => setAuthkey(e.target.value)}
                 spellCheck={false}
               />
               <button
-                className="btn btn--icon"
-                onClick={() => setShowKey((v) => !v)}
-                title={showKey ? "隐藏 authkey" : "显示 authkey"}
+                className="btn btn--ghost"
+                onClick={async () => {
+                  setError(null);
+                  try {
+                    const val = await invoke<string>("read_authkey");
+                    if (val.startsWith("FOUND|")) {
+                      setAuthkey(val.slice(6));
+                      setSuccess("已自动读取 authkey");
+                      setError(null);
+                    } else if (val === "DIR_MISSING") {
+                      setError(
+                        "未找到日志目录。请在小米运动健康 App：我的 → 关于 → 连续点击界面最上方的 App 图标 → 弹出对话框点「确定」导出日志，完成后返回再点「自动检测」。"
+                      );
+                    } else if (val === "NEED_PERMISSION") {
+                      setError("需要「所有文件访问」权限才能读取日志，正在打开设置…");
+                      await invoke("open_storage_permission_settings");
+                    } else {
+                      setError(
+                        "未检测到 authkey：请先在小米运动健康中导出日志，或手动输入"
+                      );
+                    }
+                  } catch (e) {
+                    setError(String(e));
+                  }
+                }}
                 type="button"
               >
-                {showKey ? "隐藏" : "显示"}
+                自动检测
               </button>
             </div>
-            <p className="field__note">从官方 App 日志提取的 16 字节密钥，32 位 hex 字符</p>
+            <p className="field__note">
+              自动检测：从剪贴板读取，或选择小米运动健康导出的日志 zip 解析；也可手动输入
+            </p>
           </div>
 
           <button

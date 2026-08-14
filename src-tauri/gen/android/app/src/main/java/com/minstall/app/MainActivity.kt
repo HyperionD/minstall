@@ -50,6 +50,13 @@ class MainActivity : TauriActivity() {
         needed.add(Manifest.permission.ACCESS_FINE_LOCATION)
       }
     }
+    // 读取导出日志（authkey 提取）；Android 13+ 走 SAF（另处理），此处覆盖 <13
+    if (Build.VERSION.SDK_INT < 33) {
+      if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+          != PackageManager.PERMISSION_GRANTED) {
+        needed.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+      }
+    }
     if (needed.isNotEmpty()) {
       ActivityCompat.requestPermissions(this, needed.toTypedArray(), 1001)
     }

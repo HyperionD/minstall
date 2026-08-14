@@ -1,10 +1,11 @@
 /* ============================================================
    minstall — 手环表盘安装器
    设计系统：深蓝黑 OLED 背景 + 电光青主色 + 琥珀点缀
+   浅色主题跟随系统（prefers-color-scheme: light）
    ============================================================ */
 
 :root {
-  /* 调色板 */
+  /* 调色板（默认深色） */
   --bg: #0a0e14;
   --surface: #111827;
   --surface-2: #172033;
@@ -21,6 +22,20 @@
   --warm: #f5a623;
   --ok: #4ade80;
   --err: #f87171;
+
+  /* 特定组件色（深色版） */
+  --primary-btn-text: #04211d;
+  --term-bg: #070b11;
+  --term-text: #9fd8ce;
+  --log-line: #9fd8ce;
+  --success-bg: rgba(74, 222, 128, 0.09);
+  --success-border: rgba(74, 222, 128, 0.35);
+  --success-text: #86efac;
+  --error-bg: rgba(248, 113, 113, 0.09);
+  --error-border: rgba(248, 113, 113, 0.35);
+  --error-text: #fda4a4;
+  --selected-bg: rgba(45, 212, 191, 0.12);
+  --face-glow: rgba(45, 212, 191, 0.3);
 
   /* 字体 */
   --font-display: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", "Helvetica Neue",
@@ -44,6 +59,41 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* 浅色主题：清爽浅蓝灰 + 同源青色 */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f2f6fa;
+    --surface: #ffffff;
+    --surface-2: #eef3f9;
+    --border: #c9d6e6;
+    --border-soft: #dce6f2;
+
+    --text: #1a2536;
+    --text-dim: #5a6b82;
+    --text-faint: #8b9ab0;
+
+    --accent: #0d9488;
+    --accent-strong: #0f766e;
+    --accent-dim: rgba(13, 148, 136, 0.08);
+    --warm: #d97706;
+    --ok: #16a34a;
+    --err: #dc2626;
+
+    --primary-btn-text: #ffffff;
+    --term-bg: #f6f8fb;
+    --term-text: #0f766e;
+    --log-line: #0f766e;
+    --success-bg: rgba(22, 163, 74, 0.08);
+    --success-border: rgba(22, 163, 74, 0.35);
+    --success-text: #15803d;
+    --error-bg: rgba(220, 38, 38, 0.06);
+    --error-border: rgba(220, 38, 38, 0.3);
+    --error-text: #b91c1c;
+    --selected-bg: rgba(13, 148, 136, 0.08);
+    --face-glow: rgba(13, 148, 136, 0.25);
+  }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -61,6 +111,17 @@ body {
     transparent 60%
   );
   background-attachment: fixed;
+}
+
+@media (prefers-color-scheme: light) {
+  html,
+  body {
+    background-image: radial-gradient(
+      1200px 500px at 50% -10%,
+      rgba(13, 148, 136, 0.05),
+      transparent 60%
+    );
+  }
 }
 
 .app {
@@ -223,7 +284,7 @@ body {
   font-weight: 700;
   letter-spacing: -0.03em;
   color: var(--text);
-  text-shadow: 0 0 18px rgba(45, 212, 191, 0.3);
+  text-shadow: 0 0 18px var(--face-glow);
 }
 
 .watchface__status {
@@ -381,14 +442,14 @@ body {
 .btn--primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #04211d;
+  color: var(--primary-btn-text);
   font-weight: 700;
 }
 
 .btn--primary:hover:not(:disabled) {
   background: var(--accent-strong);
   border-color: var(--accent-strong);
-  color: #04211d;
+  color: var(--primary-btn-text);
   box-shadow: 0 0 16px rgba(45, 212, 191, 0.3);
 }
 
@@ -540,21 +601,21 @@ body {
 }
 
 .alert--error {
-  background: rgba(248, 113, 113, 0.09);
-  border: 1px solid rgba(248, 113, 113, 0.35);
-  color: #fda4a4;
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  color: var(--error-text);
 }
 
 .alert--success {
-  background: rgba(74, 222, 128, 0.09);
-  border: 1px solid rgba(74, 222, 128, 0.35);
-  color: #86efac;
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+  color: var(--success-text);
 }
 
 /* ---------------- 日志终端 ---------------- */
 
 .log-term {
-  background: #070b11;
+  background: var(--term-bg);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
@@ -573,7 +634,7 @@ body {
 }
 
 .log-term__line {
-  color: #9fd8ce;
+  color: var(--term-text);
 }
 
 .log-term__line::before {
