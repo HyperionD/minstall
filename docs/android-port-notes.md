@@ -111,22 +111,31 @@ APK 产物：`src-tauri/gen/android/app/build/outputs/apk/universal/release/mins
 | 点扫描闪退 | Android 13+ registerReceiver 无 flags 抛异常 | registerReceiver 带 `RECEIVER_NOT_EXPORTED`；scan 整体 try-catch |
 | Kotlin lateinit 跨文件访问 | backing field 不可访问 | 改 `@Volatile var ctx: Context?` |
 | jni crate 数组 API | JObject 不支持 get_array_length | 用 `JObjectArray` 类型 |
+| native 线程 FindClass 失败 | 扫描/连接 ClassNotFoundException 闪退 | 缓存应用 ClassLoader，native 线程用 loadClass 兜底（find_app_class） |
+| 事件监听被 ACL 拒绝 | 进度事件 emit ok 但前端收不到 | capabilities 新增 android.json（含 core:default，桌面限 linux/macOS/windows） |
+| R8 裁剪 JNI 桥类 | 类存在但方法被裁，NoSuchMethodError | proguard keep BleScan/BleRfcomm/BleFilePicker |
+| BluetoothSocket fd 阻塞模式 | AsyncFd 要求非阻塞，阻塞 read 卡死 timeout | 独立阻塞读线程 + mpsc channel |
+| fd 所有权冲突 | fdsan abort: close unowned fd（断开即崩） | Rust 只借用 fd，断开由 Kotlin `BleRfcomm.close()` 关闭 |
+| startDiscovery 不含已配对设备 | 手环已配对扫描不到 | 扫描结果并入 `adapter.bondedDevices` |
+| RFCOMM 被官方 App 占用 | 连接失败 IOException read -1 | 失败自动 removeBond + createBond 重新配对顶掉占用 |
+| 安装确认等太久 | 手环不推 InstallResult，卡 300s | 10s 短等 + 快速列表确认，未确认返回「已传输」由用户手环确认 |
 
 ## 7. 状态与下一步
 
 **已完成**：
 - 传输抽象层重构（Linux/Android 通用协议层）
 - 平台条件编译，双平台编译通过（Linux 27 测试、Android 0 错误）
-- Kotlin RFCOMM 连接 + JNI fd 桥 + tokio 流
-- Kotlin 蓝牙扫描（startDiscovery + JNI）
+- Kotlin RFCOMM 连接 + JNI fd 桥 + 阻塞读线程字节流
+- Kotlin 蓝牙扫描（startDiscovery + JNI，含已配对设备）
 - 蓝牙权限（Manifest + 运行时申请）
-- APK 构建 + 签名
+- 自动解除配对顶掉 RFCOMM 占用方
+- SAF 文件选择（ACTION_OPEN_DOCUMENT → 缓存 → 路径）
+- **真机全链路验证（2026-08-14）：连接 → 认证 → 安装 → 断开**
+- 产品级 UI（表盘签名元素 + 深色设计系统）+ 自定义图标
 
 **待办**：
-- [ ] Android 文件选择（SAF，替代手动路径）
-- [ ] Android 真机联调（手环绑定手机后验证 连接→认证→安装）
-- [ ] Android 上 BATCH 策略验证（手环 ACK 批级，可能比 Linux 更快）
 - [ ] 签名正式化（release keystore，替代 debug）
+- [ ] 安装成功后的「已确认」提示可考虑让用户手动确认收尾
 
 ## 8. 补充：8-13 Linux 版修复（同日）
 
