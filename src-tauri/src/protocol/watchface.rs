@@ -10,6 +10,15 @@ use crate::protocol::auth::Session;
 use crate::protocol::consts::*;
 use crate::protocol::encoding::*;
 
+/// 取字节串前 n 字节的 hex（诊断日志用）。
+pub fn hex_prefix(data: &[u8], n: usize) -> String {
+    data.iter()
+        .take(n)
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// 把数据按 size 切块（纯函数，测试契约同 POC chunk_data）。
 pub fn chunk_data(data: &[u8], size: usize) -> Vec<&[u8]> {
     data.chunks(size).collect()
@@ -192,6 +201,16 @@ fn protobuf_body(payload: &[u8], session: &Session) -> Option<Vec<u8>> {
     }
 }
 
+/// 安装结果：反馈给用户。传输成功即返回，不长时间等待确认（体验优先）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PushOutcome {
+    /// InstallResult 明确确认（code=2/3）或列表确认。
+    Confirmed,
+    /// 字节流已全部传输完成，但手环未推确认（正常现象，需用户在手环上确认）。
+    Transferred,
+}
+
 /// 安装表盘：认证后调用（stream 已连 SPP，seq 由调用方维护）。on_progress(sent_bytes, total_bytes)。
 /// S 为传输层（tokio AsyncRead+AsyncWrite）：Linux bluer Stream / Android JNI 桥。
 pub async fn push<S>(
@@ -200,7 +219,7 @@ pub async fn push<S>(
     bin_path: &str,
     seq_ref: &mut u8,
     on_progress: impl Fn(usize, usize),
-) -> Result<(), BleError>
+) -> Result<PushOutcome, BleError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -359,9 +378,9 @@ where
     };
     eprintln!("[minstall] 平均每批 ACK 等待 {avg_wait:.3}s（共 {} 批）", ack_waits.len());
 
-    // 4) 确认安装结果：优先等手环推送 InstallResult（id=5，code 2/3 成功）；
-    //    手环经常不推（真机验证：上传完成后有时只推中间通知），此时主动查询
-    //    GET_INSTALLED_LIST 确认目标表盘 id 是否已出现在列表（可靠兑底）。
+    // 4) 确认安装结果：等手环推送 InstallResult（id=5，code 2/3 成功）短时间；
+    //    手环经常不推（真机多次验证），故仅短等待，未收到即返回「已传输」，
+    //    由用户在手环上确认，避免长时间卡等待（体验优先）。
     let install = wait_wp(
         &mut ch,
         session,
@@ -371,7 +390,7 @@ where
                 && w.install_result_code.is_some()
         },
         "InstallResult",
-        30, // 短等待；手环不推则由下方列表查询兑底
+        10, // 手环经常不推 InstallResult；只短等 10s，未收到即返回已传输
     )
     .await;
     let install = match install {
@@ -382,37 +401,29 @@ where
         let code = wp.install_result_code.unwrap_or(0);
         if code == INSTALL_RESULT_SUCCESS || code == INSTALL_RESULT_USED {
             eprintln!("[minstall] ★ InstallResult code={code}（2=SUCCESS, 3=INSTALL_USED）");
-            return Ok(());
+            *seq_ref = seq;
+            return Ok(PushOutcome::Confirmed);
         }
-        eprintln!("[minstall] InstallResult code={code}（非成功），继续查列表确认");
+        eprintln!("[minstall] InstallResult code={code}（非成功）");
     } else {
-        eprintln!("[minstall] InstallResult 等待超时，主动查询表盘列表确认...");
+        eprintln!("[minstall] InstallResult 10s 未收到（手环常不推），不再等待");
     }
+    // 快速查一次列表：能确认就报已安装，查不到也不阻塞（返回已传输）
     let wp_id = parse_watchface_id(&data)?;
-    let mut found = false;
-    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(300);
-    let mut attempt = 0;
-    loop {
-        if tokio::time::Instant::now() >= deadline {
-            break;
-        }
-        attempt += 1;
-        let ids = query_installed_ids(&mut ch, session, &mut seq).await;
-        eprintln!("[minstall] 列表查询第 {attempt} 次：{} 个表盘", ids.len());
-        if ids.iter().any(|id| id == &wp_id) {
-            eprintln!("[minstall] ★ 表盘列表确认：{wp_id} 已安装");
-            found = true;
-            break;
-        }
-        eprintln!("[minstall] 列表未见 {wp_id}，手环可能仍在安装，20s 后重试...");
-        tokio::time::sleep(tokio::time::Duration::from_secs(20)).await;
+    let ids = query_installed_ids(&mut ch, session, &mut seq).await;
+    eprintln!("[minstall] 列表查询：{} 个表盘", ids.len());
+    let found = ids.iter().any(|id| id == &wp_id);
+    if found {
+        eprintln!("[minstall] ★ 表盘列表确认：{wp_id} 已安装");
+    } else {
+        eprintln!("[minstall] 列表未见 {wp_id}（可能仍在写入），按已传输处理");
     }
     // seq 由调用方维护（已通过 &mut seq 递增），此处直接返回结果
     *seq_ref = seq; // 写回会话 seq（供后续查询/安装复用，避免 seq 冲突）
     if found {
-        Ok(())
+        Ok(PushOutcome::Confirmed)
     } else {
-        Err(BleError::PushFailed { chunk: 0, detail: "InstallResult 未收到且表盘列表未见目标表盘，安装可能失败".into() })
+        Ok(PushOutcome::Transferred)
     }
 }
 
@@ -427,17 +438,23 @@ where
 {
     let frame = build_protobuf_frame(*seq, &encode_get_installed_list(), true, &session.enc_key);
     *seq = seq.wrapping_add(1);
+    eprintln!("[minstall] GET_INSTALLED_LIST 发送 seq={}", seq.wrapping_sub(1));
     if ch.write(&frame).await.is_err() {
+        eprintln!("[minstall] GET_INSTALLED_LIST 写入失败");
         return vec![];
     }
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
     loop {
         if tokio::time::Instant::now() >= deadline {
+            eprintln!("[minstall] GET_INSTALLED_LIST 等待响应超时");
             return vec![];
         }
         match tokio::time::timeout(std::time::Duration::from_millis(200), ch.read_more()).await {
             Ok(Ok(true)) => {}
-            Ok(Ok(false)) | Ok(Err(_)) => return vec![],
+            Ok(Ok(false)) | Ok(Err(_)) => {
+                eprintln!("[minstall] GET_INSTALLED_LIST 读取失败/断开");
+                return vec![];
+            }
             Err(_) => continue,
         }
         for (pt, _fseq, payload) in ch.drain_ack().await.unwrap_or_default() {
@@ -446,8 +463,12 @@ where
             }
             if let Some(body) = protobuf_body(&payload, session) {
                 if let Some(wp) = parse_wear_packet(&body) {
+                    eprintln!("[minstall] 收到 WearPacket typ={:?} id={:?}", wp.typ, wp.id);
                     if wp.typ == Some(WEARPACKET_TYPE_WATCH_FACE) && wp.id == Some(WP_ID_GET_INSTALLED_LIST) {
-                        return parse_watchface_list(&body);
+                        let ids = parse_watchface_list(&body);
+                        eprintln!("[minstall] 解析到 {} 个表盘: {:?}", ids.len(), ids);
+                        eprintln!("[minstall] 原始响应 body hex (前 256B): {}", hex_prefix(&body, 256));
+                        return ids;
                     }
                 }
             }

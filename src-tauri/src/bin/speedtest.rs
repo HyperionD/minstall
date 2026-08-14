@@ -38,7 +38,7 @@ async fn main() {
     })
     .await
     {
-        Ok(()) => eprintln!("[speedtest] ✅ 安装成功 ({:?})", t1.elapsed()),
+        Ok(outcome) => eprintln!("[speedtest] ✅ 安装成功 ({:?}) outcome={outcome:?}", t1.elapsed()),
         Err(e) => eprintln!("[speedtest] ❌ 安装失败: {e}"),
     }
 }

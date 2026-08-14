@@ -6,6 +6,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.util.Log
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -40,16 +41,40 @@ object BleScan {
 
     private fun scanInternal(timeoutMs: Long): Array<String> {
         val adapter = BluetoothAdapter.getDefaultAdapter()
-            ?: return emptyArray()
-        if (!adapter.isEnabled) return emptyArray()
-        val ctx = AppContext.ctx ?: return emptyArray()
+        if (adapter == null) {
+            Log.e("BleScan", "adapter==null")
+            return emptyArray()
+        }
+        if (!adapter.isEnabled) {
+            Log.e("BleScan", "adapter not enabled")
+            return emptyArray()
+        }
+        val ctx = AppContext.ctx
+        if (ctx == null) {
+            Log.e("BleScan", "ctx==null")
+            return emptyArray()
+        }
 
         val results = mutableListOf<String>()
         val done = CountDownLatch(1)
         var receiver: BroadcastReceiver? = null
 
+        // Android startDiscovery() 不会报告已配对（bonded）设备，但手环通常已与手机配对，
+        // 所以先把已配对设备加入结果（rssi 用 0 占位），再叠加本次扫描发现的新设备。
+        try {
+            val bonded = adapter.bondedDevices
+            for (d in bonded) {
+                if (!results.any { it.startsWith("${d.name ?: ""}|") }) {
+                    results.add("${d.name ?: ""}|${d.address}|0")
+                }
+            }
+            Log.i("BleScan", "bonded devices=${bonded.size}")
+        } catch (e: Exception) {
+            Log.w("BleScan", "get bonded failed: $e")
+        }
+
         // 先取消已有发现，再开始新发现
-        try { adapter.cancelDiscovery() } catch (_: Exception) {}
+        try { adapter.cancelDiscovery() } catch (e: Exception) { Log.w("BleScan", "cancelDiscovery: $e") }
 
         val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
         filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
@@ -82,13 +107,15 @@ object BleScan {
         }
 
         val started = adapter.startDiscovery()
+        Log.i("BleScan", "startDiscovery=$started timeoutMs=$timeoutMs")
         if (!started) {
             try { ctx.unregisterReceiver(receiver) } catch (_: Exception) {}
             return emptyArray()
         }
 
         // 等待超时或发现结束
-        done.await(timeoutMs, TimeUnit.MILLISECONDS)
+        val finished = done.await(timeoutMs, TimeUnit.MILLISECONDS)
+        Log.i("BleScan", "discovery finished=$finished found=${results.size}")
         try { adapter.cancelDiscovery() } catch (_: Exception) {}
         try { ctx.unregisterReceiver(receiver) } catch (_: Exception) {}
 

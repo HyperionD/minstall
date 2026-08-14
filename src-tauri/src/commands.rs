@@ -97,18 +97,29 @@ pub async fn install_watchface(
     app: AppHandle,
     state: State<'_, SharedManager>,
     bin_path: String,
-) -> Result<(), String> {
+) -> Result<watchface::PushOutcome, String> {
     let mut mgr = state.inner().lock().await;
     let session = mgr.session().map_err(|e| e.to_string())?;
     let mut seq = mgr.seq();
     let stream = mgr.stream_mut().map_err(|e| e.to_string())?;
     let result = watchface::push(stream, &session, &bin_path, &mut seq, |sent, total| {
-        let _ = app.emit(
+        let r = app.emit(
             "install:progress",
             serde_json::json!({ "sent": sent, "total": total }),
         );
+        eprintln!("[minstall] emit install:progress sent={sent} total={total} ok={}", r.is_ok());
     })
     .await;
     mgr.advance_seq(seq);
     result.map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn pick_watchface_file() -> Result<String, String> {
+    let path = tokio::task::spawn_blocking(|| crate::ble::file_picker_android::pick())
+        .await
+        .map_err(|e| format!("文件选择任务失败: {e}"))?
+        .map_err(|e| e.to_string())?;
+    Ok(path)
 }
