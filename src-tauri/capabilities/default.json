@@ -10,5 +10,5 @@
     "opener:default",
     "dialog:default"
   ],
-  "platforms": ["linux", "macOS", "windows"]
+  "platforms": ["linux"]
 }

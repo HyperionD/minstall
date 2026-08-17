@@ -1,0 +1,7 @@
+# minstall notices
+
+minstall is an independent research tool and is not affiliated with, sponsored by, or endorsed by Xiaomi, Xiaomi Smart Band, or Xiaomi Health.
+
+The protocol implementation was developed through independent research and publicly available protocol observations. AstroBox, Gadgetbridge, and Kodo are acknowledged as protocol and interoperability references; this repository does not include their source code.
+
+Third-party dependencies retain their own licenses. See `package-lock.json` and `src-tauri/Cargo.lock` for dependency resolution details.
