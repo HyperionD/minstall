@@ -3,9 +3,18 @@ package com.minstall.app
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Environment
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
 import android.util.Log
 import java.io.File
+import java.nio.charset.StandardCharsets
+import java.security.KeyStore
 import java.util.zip.ZipFile
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 
 /**
  * authkey 自动读取（全自动，无弹窗）：
@@ -24,6 +33,11 @@ import java.util.zip.ZipFile
  */
 object AuthkeyReader {
     private const val TAG = "AuthkeyReader"
+    private const val SECURE_PREFS = "minstall_secure"
+    private const val SAVED_CIPHERTEXT = "authkey_ciphertext"
+    private const val SAVED_IV = "authkey_iv"
+    private const val KEY_ALIAS = "minstall_authkey"
+    private const val ANDROID_KEYSTORE = "AndroidKeyStore"
 
     /** 32 位 hex（允许 0x 前缀）。 */
     private val HEX32 = Regex("(?:0[xX])?[0-9a-fA-F]{32}")
@@ -46,6 +60,77 @@ object AuthkeyReader {
         }
         // 2. Download/wearablelog 自动扫描
         return readFromWearableLog(ctx)
+    }
+
+    /** 读取 Android Keystore 加密保存的 authkey；未保存或解密失败返回空串。 */
+    @JvmStatic
+    fun readSaved(): String {
+        val ctx = AppContext.ctx ?: return ""
+        return try {
+            val prefs = ctx.getSharedPreferences(SECURE_PREFS, Context.MODE_PRIVATE)
+            val ciphertext = prefs.getString(SAVED_CIPHERTEXT, null) ?: return ""
+            val iv = prefs.getString(SAVED_IV, null) ?: return ""
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(
+                Cipher.DECRYPT_MODE,
+                getOrCreateKey(),
+                GCMParameterSpec(128, Base64.decode(iv, Base64.NO_WRAP))
+            )
+            val value = String(
+                cipher.doFinal(Base64.decode(ciphertext, Base64.NO_WRAP)),
+                StandardCharsets.UTF_8
+            )
+            if (HEX32.matches(value)) value.lowercase() else ""
+        } catch (e: Exception) {
+            Log.w(TAG, "读取已保存 authkey 失败: ${e.javaClass.simpleName}")
+            ""
+        }
+    }
+
+    /** 使用 Android Keystore 的 AES-GCM 保存 authkey。 */
+    @JvmStatic
+    fun saveSaved(value: String): Boolean {
+        val ctx = AppContext.ctx ?: return false
+        return try {
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
+            val ciphertext = cipher.doFinal(value.toByteArray(StandardCharsets.UTF_8))
+            val prefs = ctx.getSharedPreferences(SECURE_PREFS, Context.MODE_PRIVATE)
+            prefs.edit()
+                .putString(SAVED_CIPHERTEXT, Base64.encodeToString(ciphertext, Base64.NO_WRAP))
+                .putString(SAVED_IV, Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
+                .commit()
+        } catch (e: Exception) {
+            Log.w(TAG, "保存 authkey 失败: ${e.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** 清除已保存的 authkey，不删除 Keystore 密钥以便后续重新保存。 */
+    @JvmStatic
+    fun clearSaved(): Boolean {
+        val ctx = AppContext.ctx ?: return false
+        return ctx.getSharedPreferences(SECURE_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .remove(SAVED_CIPHERTEXT)
+            .remove(SAVED_IV)
+            .commit()
+    }
+
+    private fun getOrCreateKey(): SecretKey {
+        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        (keyStore.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+        generator.init(
+            KeyGenParameterSpec.Builder(
+                KEY_ALIAS,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .build()
+        )
+        return generator.generateKey()
     }
 
     /** 剪贴板中的 32 位 hex；无则 null。 */

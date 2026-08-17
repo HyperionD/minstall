@@ -87,6 +87,7 @@ function App() {
   const [selected, setSelected] = useState<Device | null>(null);
   const [manualMac, setManualMac] = useState("");
   const [authkey, setAuthkey] = useState("");
+  const [rememberAuthkey, setRememberAuthkey] = useState(false);
   const [binPath, setBinPath] = useState("");
   const [storage, setStorage] = useState<StorageInfo | null>(null);
   const [progress, setProgress] = useState<Progress>({ sent: 0, total: 0 });
@@ -98,6 +99,7 @@ function App() {
   const [watchStatus, setWatchStatus] = useState("等待连接");
 
   const logRef = useRef<HTMLDivElement>(null);
+  const isAndroid = /Android/i.test(navigator.userAgent);
 
   const setLogsAuto = (fn: (prev: string[]) => string[]) => {
     setLogs(fn);
@@ -110,42 +112,48 @@ function App() {
     }
   }, [logs]);
 
-  // Android：启动时自动读取 authkey（剪贴板 32-hex；无则静默，可手动点自动检测走 SAF）
+  // 优先从系统安全存储加载 authkey；Android 无保存值时再尝试自动检测。
   useEffect(() => {
-    const isAndroid = /Android/i.test(navigator.userAgent);
-    if (!isAndroid) return;
     let cancelled = false;
-    invoke<string>("read_authkey")
-      .then((val) => {
-        if (!cancelled && val && val.startsWith("FOUND|")) {
+    const loadAuthkey = async () => {
+      let loaded = false;
+      try {
+        const saved = await invoke<string | null>("get_saved_authkey");
+        if (!cancelled && saved) {
+          setAuthkey(saved);
+          setRememberAuthkey(true);
+          setSuccess("已从系统安全存储加载 authkey");
+          loaded = true;
+        }
+      } catch {
+        /* 当前平台没有可用的已保存 authkey 时静默继续 */
+      }
+      if (cancelled || loaded || !isAndroid) return;
+      try {
+        const val = await invoke<string>("read_authkey");
+        if (!cancelled && val.startsWith("FOUND|")) {
           setAuthkey(val.slice(6));
           setSuccess("已自动读取 authkey");
         }
-      })
-      .catch(() => {
+      } catch {
         /* 自动读取失败不打扰用户，可手动输入 */
-      });
+      }
+    };
+    void loadAuthkey();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isAndroid]);
 
-  // 记住上次连接：启动时自动填入 MAC + authkey（免扫描直接连接）
+  // 记住上次连接：MAC 地址可普通持久化，authkey 只经过系统安全存储。
   useEffect(() => {
-    let cancelled = false;
     try {
       const mac = localStorage.getItem("minstall.lastMac");
-      const key = localStorage.getItem("minstall.lastAuthkey");
-      if (!cancelled && mac) {
-        setManualMac(mac);
-        if (key) setAuthkey(key);
-      }
+      localStorage.removeItem("minstall.lastAuthkey");
+      if (mac) setManualMac(mac);
     } catch {
       /* 读取失败忽略 */
     }
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   useEffect(() => {
@@ -200,12 +208,21 @@ function App() {
       setWatchStatus("认证中…");
       await invoke("authenticate", { authkey });
       setLogsAuto((prev) => [...prev, "认证成功"]);
-      // 记住连接：下次免扫描直接填入 MAC + authkey
+      // MAC 可普通持久化；authkey 仅在用户同意时写入系统安全存储。
       try {
         localStorage.setItem("minstall.lastMac", address);
-        localStorage.setItem("minstall.lastAuthkey", authkey);
       } catch {
-        /* 存储失败不影响 */
+        /* MAC 保存失败不影响连接 */
+      }
+      try {
+        if (rememberAuthkey) {
+          await invoke("save_authkey", { authkey });
+          setLogsAuto((prev) => [...prev, "authkey 已保存到系统安全存储"]);
+        } else {
+          await invoke("clear_saved_authkey");
+        }
+      } catch (e) {
+        setError(`认证成功，但保存 authkey 失败：${e}`);
       }
       setWatchState("ok");
       setWatchStatus("已认证 · 就绪");
@@ -439,40 +456,66 @@ function App() {
                 onChange={(e) => setAuthkey(e.target.value)}
                 spellCheck={false}
               />
-              <button
-                className="btn btn--ghost"
-                onClick={async () => {
-                  setError(null);
-                  try {
-                    const val = await invoke<string>("read_authkey");
-                    if (val.startsWith("FOUND|")) {
-                      setAuthkey(val.slice(6));
-                      setSuccess("已自动读取 authkey");
-                      setError(null);
-                    } else if (val === "DIR_MISSING") {
-                      setError(
-                        "未找到日志目录。请在小米运动健康 App：我的 → 关于 → 连续点击界面最上方的 App 图标 → 弹出对话框点「确定」导出日志，完成后返回再点「自动检测」。"
-                      );
-                    } else if (val === "NEED_PERMISSION") {
-                      setError("需要「所有文件访问」权限才能读取日志，正在打开设置…");
-                      await invoke("open_storage_permission_settings");
-                    } else {
-                      setError(
-                        "未检测到 authkey：请先在小米运动健康中导出日志，或手动输入"
-                      );
+              {isAndroid && (
+                <button
+                  className="btn btn--ghost"
+                  onClick={async () => {
+                    setError(null);
+                    try {
+                      const val = await invoke<string>("read_authkey");
+                      if (val.startsWith("FOUND|")) {
+                        setAuthkey(val.slice(6));
+                        setSuccess("已自动读取 authkey");
+                        setError(null);
+                      } else if (val === "DIR_MISSING") {
+                        setError(
+                          "未找到日志目录。请在小米运动健康 App：我的 → 关于 → 连续点击界面最上方的 App 图标 → 弹出对话框点「确定」导出日志，完成后再点「自动检测」。"
+                        );
+                      } else if (val === "NEED_PERMISSION") {
+                        setError("需要「所有文件访问」权限才能读取日志，正在打开设置…");
+                        await invoke("open_storage_permission_settings");
+                      } else {
+                        setError(
+                          "未检测到 authkey：请先在小米运动健康中导出日志，或手动输入"
+                        );
+                      }
+                    } catch (e) {
+                      setError(String(e));
                     }
-                  } catch (e) {
-                    setError(String(e));
-                  }
-                }}
-                type="button"
-              >
-                自动检测
-              </button>
+                  }}
+                  type="button"
+                >
+                  自动检测
+                </button>
+              )}
             </div>
             <p className="field__note">
-              自动检测：从剪贴板读取，或选择小米运动健康导出的日志 zip 解析；也可手动输入
+              {isAndroid
+                ? "自动检测：从剪贴板读取，或扫描小米运动健康导出的日志 zip；也可手动输入"
+                : "Linux 桌面端请手动输入从官方 App 导出的 authkey"}
             </p>
+            <label className="secure-option">
+              <input
+                type="checkbox"
+                checked={rememberAuthkey}
+                onChange={async (event) => {
+                  const checked = event.target.checked;
+                  setRememberAuthkey(checked);
+                  if (!checked) {
+                    try {
+                      await invoke("clear_saved_authkey");
+                      setSuccess("已清除系统中保存的 authkey");
+                    } catch (e) {
+                      setError(`清除已保存 authkey 失败：${e}`);
+                    }
+                  }
+                }}
+              />
+              <span>
+                记住 authkey
+                <small>仅保存在系统安全存储中，不写入浏览器本地存储</small>
+              </span>
+            </label>
           </div>
 
           <button

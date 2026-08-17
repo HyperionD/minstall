@@ -92,6 +92,57 @@ pub async fn get_storage_info(
     }
 }
 
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub async fn get_saved_authkey() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(crate::secure_storage::get)
+        .await
+        .map_err(|error| format!("读取 authkey 任务失败: {error}"))?
+}
+
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub async fn save_authkey(authkey: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::secure_storage::save(&authkey))
+        .await
+        .map_err(|error| format!("保存 authkey 任务失败: {error}"))?
+}
+
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub async fn clear_saved_authkey() -> Result<(), String> {
+    tokio::task::spawn_blocking(crate::secure_storage::clear)
+        .await
+        .map_err(|error| format!("清除 authkey 任务失败: {error}"))?
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn get_saved_authkey() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(crate::ble::authkey_android::read_saved)
+        .await
+        .map_err(|error| format!("读取 authkey 任务失败: {error}"))?
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn save_authkey(authkey: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::ble::authkey_android::save_saved(&authkey))
+        .await
+        .map_err(|error| format!("保存 authkey 任务失败: {error}"))?
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn clear_saved_authkey() -> Result<(), String> {
+    tokio::task::spawn_blocking(crate::ble::authkey_android::clear_saved)
+        .await
+        .map_err(|error| format!("清除 authkey 任务失败: {error}"))?
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub async fn install_watchface(
     app: AppHandle,
@@ -145,7 +196,12 @@ pub async fn read_authkey() -> Result<String, String> {
         .await
         .map_err(|e| format!("authkey 读取任务失败: {e}"))?
         .map_err(|e| e.to_string())?;
-    eprintln!("[minstall] read_authkey 返回: '{val}'");
+    let status = if val.starts_with("FOUND|") {
+        "FOUND"
+    } else {
+        val.as_str()
+    };
+    eprintln!("[minstall] read_authkey 状态: {status}");
     Ok(val)
 }
 

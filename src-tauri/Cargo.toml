@@ -6,8 +6,8 @@ authors = ["minstall contributors"]
 edition = "2021"
 license = "MIT"
 readme = "../README.md"
-repository = "https://github.com/minstall/minstall"
-homepage = "https://github.com/minstall/minstall"
+repository = "https://github.com/HyperionD/minstall"
+homepage = "https://github.com/HyperionD/minstall"
 # 默认运行 GUI 主程序（src/main.rs）；诊断工具用 --bin 显式指定
 default-run = "minstall"
 
@@ -42,8 +42,10 @@ thiserror = "2"
 [target.'cfg(target_os = "linux")'.dependencies]
 bluer = { version = "0.17", features = ["bluetoothd", "rfcomm"] }
 futures = "0.3"
+keyring-core = "1.0.0"
 # 文件选择对话框：仅桌面端（Android 用原生 SAF，经 Tauri command 暴露）
 tauri-plugin-dialog = "2.7"
+zbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rust"] }
 
 # Android：JNI 调 Kotlin RFCOMM + libc 读写 fd
 [target.'cfg(target_os = "android")'.dependencies]

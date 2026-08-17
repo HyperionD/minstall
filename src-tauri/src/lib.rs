@@ -4,6 +4,7 @@ pub mod ble;
 pub mod commands;
 pub mod events;
 pub mod protocol;
+pub mod secure_storage;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -20,6 +21,18 @@ pub fn run() {
             commands::authenticate,
             commands::get_storage_info,
             commands::install_watchface,
+            #[cfg(target_os = "linux")]
+            commands::get_saved_authkey,
+            #[cfg(target_os = "linux")]
+            commands::save_authkey,
+            #[cfg(target_os = "linux")]
+            commands::clear_saved_authkey,
+            #[cfg(target_os = "android")]
+            commands::get_saved_authkey,
+            #[cfg(target_os = "android")]
+            commands::save_authkey,
+            #[cfg(target_os = "android")]
+            commands::clear_saved_authkey,
             #[cfg(target_os = "android")]
             commands::pick_watchface_file,
             #[cfg(target_os = "android")]

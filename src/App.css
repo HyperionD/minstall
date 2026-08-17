@@ -364,6 +364,32 @@ body {
   color: var(--text-faint);
 }
 
+.secure-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 3px;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.secure-option input {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.secure-option span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.secure-option small {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
 .input {
   width: 100%;
   background: var(--bg);
