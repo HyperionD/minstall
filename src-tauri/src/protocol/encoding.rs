@@ -43,7 +43,7 @@ pub fn encode_v2_frame(packet_type: u8, seq: u8, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(V2_HEADER_LEN + payload.len());
     out.extend_from_slice(&V2_PREAMBLE);
     out.push(packet_type & 0x0F);
-    out.push(seq & 0xFF);
+    out.push(seq);
     out.extend_from_slice(&(payload.len() as u16).to_le_bytes());
     out.extend_from_slice(&crc16_arc(payload).to_le_bytes());
     out.extend_from_slice(payload);
@@ -212,7 +212,7 @@ pub fn build_protobuf_frame(seq: u8, cmd: &[u8], encrypt: bool, key: &[u8]) -> V
     } else {
         (OPCODE_PLAINTEXT, cmd.to_vec())
     };
-    let mut payload = vec![CHANNEL_PROTOBUF & 0x0F, opcode & 0xFF];
+    let mut payload = vec![CHANNEL_PROTOBUF & 0x0F, opcode];
     payload.extend_from_slice(&body);
     encode_v2_frame(V2_PACKET_DATA, seq, &payload)
 }
@@ -235,7 +235,7 @@ pub fn varint_encode(mut n: u64) -> Vec<u8> {
 }
 
 pub fn field_varint(num: u64, value: u64) -> Vec<u8> {
-    let mut out = varint_encode((num << 3) | 0);
+    let mut out = varint_encode(num << 3);
     out.extend_from_slice(&varint_encode(value));
     out
 }
@@ -754,10 +754,10 @@ mod tests {
             let mut crc: u32 = 0;
             for &byte in data {
                 for j in 0..8u32 {
-                    crc = (crc << 1) & 0xFFFFFFFF;
+                    crc <<= 1;
                     let bit = ((crc >> 16) & 1) ^ ((byte as u32 >> j) & 1);
                     if bit == 1 {
-                        crc = (crc ^ 0x8005) & 0xFFFFFFFF;
+                        crc ^= 0x8005;
                     }
                 }
             }

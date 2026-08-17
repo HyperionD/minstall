@@ -81,10 +81,12 @@ impl Manager {
 
         // 2) 注册 DisplayYesNo agent（真机验证：手环配对需确认）
         if self.agent.is_none() {
-            let mut agent = Agent::default();
-            agent.request_confirmation = Some(Box::new(|_: RequestConfirmation| {
-                Box::pin(async { Ok(()) }) // 自动接受确认
-            }));
+            let agent = Agent {
+                request_confirmation: Some(Box::new(|_: RequestConfirmation| {
+                    Box::pin(async { Ok(()) }) // 自动接受确认
+                })),
+                ..Agent::default()
+            };
             let handle = bluer_session
                 .register_agent(agent)
                 .await

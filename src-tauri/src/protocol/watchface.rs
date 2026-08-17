@@ -352,8 +352,8 @@ where
 
     while idx < total {
         let batch_end = (idx + batch).min(total);
-        for j in idx..batch_end {
-            let frame = encode_v2_frame(V2_PACKET_DATA, data_seq, &frames[j]);
+        for (j, frame_payload) in frames.iter().enumerate().take(batch_end).skip(idx) {
+            let frame = encode_v2_frame(V2_PACKET_DATA, data_seq, frame_payload);
             ch.write(&frame).await.map_err(|e| BleError::PushFailed { chunk: j, detail: e })?;
             data_seq = data_seq.wrapping_add(1);
         }
@@ -391,10 +391,7 @@ where
         10, // 手环经常不推 InstallResult；只短等 10s，未收到即返回已传输
     )
     .await;
-    let install = match install {
-        Ok(wp) => Some(wp),
-        Err(_) => None,
-    };
+    let install = install.ok();
     if let Some(wp) = &install {
         let code = wp.install_result_code.unwrap_or(0);
         if code == INSTALL_RESULT_SUCCESS || code == INSTALL_RESULT_USED {
@@ -631,7 +628,11 @@ mod tests {
 
     #[test]
     fn mass_frames_reassemble() {
-        let data = [0x5Au8, 0xA5].iter().chain(std::iter::repeat(&1u8).take(100)).copied().collect::<Vec<_>>();
+        let data = [0x5Au8, 0xA5]
+            .iter()
+            .chain(std::iter::repeat_n(&1u8, 100))
+            .copied()
+            .collect::<Vec<_>>();
         let (frames, total, with_crc) = build_mass_frames(&data, 64);
         assert_eq!(total, frames.len());
         assert!(total > 0);

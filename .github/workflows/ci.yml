@@ -39,6 +39,5 @@ jobs:
           components: rustfmt, clippy
       # Existing protocol files predate the repository-wide formatter; keep the new module formatted.
       - run: rustfmt --check src-tauri/src/secure_storage.rs
-      # Clippy currently reports legacy warnings but must still compile every target.
-      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path src-tauri/Cargo.toml

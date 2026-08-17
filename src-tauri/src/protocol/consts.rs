@@ -94,7 +94,7 @@ mod tests {
     #[test]
     fn protocol_notes_values_are_non_empty() {
         assert!(!SPP_SERVICE_UUID.is_empty());
-        assert!(RFCOMM_CHANNEL > 0);
+        const { assert!(RFCOMM_CHANNEL > 0) };
         assert_eq!(AUTHKEY_LEN, 32);
         assert!(!V1_HELLO.is_empty());
     }
@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn fragment_size_math() {
         // fragment = slice_length - 6
-        assert!(DEFAULT_SLICE_LENGTH > MASS_FRAME_OVERHEAD);
+        const { assert!(DEFAULT_SLICE_LENGTH > MASS_FRAME_OVERHEAD) };
     }
 
     #[test]
