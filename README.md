@@ -19,7 +19,15 @@
 
 ## 📸 截图
 
-截图和录屏将在首个公开测试版发布后补充。当前版本定位为 experimental release。
+### Android：连接手环
+
+<img src="docs/screenshots/android-connect.jpg" alt="Android 端连接手环页面" width="360">
+
+### Android：认证后安装表盘
+
+<img src="docs/screenshots/android-authenticated.jpg" alt="Android 端认证后安装表盘页面" width="360">
+
+> 截图中的 MAC 地址和 authkey 已脱敏。
 
 ---
 
@@ -135,4 +143,4 @@ pocs/           Python POC 脚本
 ## 🙏 致谢
 
 - [Gadgetbridge](https://github.com/Freeyourgadget/Gadgetbridge) / [Kodo](https://github.com/kidneyweakx/Kodo)（Band 9 协议参考）
-- [AstroBox](https://github.com/astrobox)（Band 10 Pro WearPacket 协议参考）
+- [AstroBox](https://github.com/AstralSightStudios/AstroBox-NG)（Band 10 Pro WearPacket 协议参考）
