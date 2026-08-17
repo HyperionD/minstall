@@ -32,3 +32,14 @@ cargo test
 ## Pull Request
 
 请说明变更内容、验证命令、已知限制，以及是否涉及 Android 真机验证。不要在 Issue 或 PR 中粘贴 authkey 或完整导出日志。
+
+## 发布 Android 版本
+
+推送符合 `v*.*.*` 格式的 tag 后，GitHub Actions 会自动构建并发布 Android ARM64 pre-release。也可以在 Actions 页面手动运行 `Release Android APK`，输入已有版本 tag。
+
+仓库需要配置以下 GitHub Actions Secrets；签名文件只通过 `ANDROID_KEYSTORE_BASE64` 注入，不要提交到仓库：
+
+- `ANDROID_KEYSTORE_BASE64`
+- `MINSTALL_STORE_PASSWORD`
+- `MINSTALL_KEY_ALIAS`
+- `MINSTALL_KEY_PASSWORD`
