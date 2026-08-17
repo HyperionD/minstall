@@ -63,6 +63,13 @@ jobs:
             "platforms;${ANDROID_PLATFORM}" \
             "build-tools;${ANDROID_BUILD_TOOLS}" \
             "ndk;${ANDROID_NDK}"
+          ndk_path="$ANDROID_HOME/ndk/$ANDROID_NDK"
+          test -x "$ndk_path/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          {
+            echo "NDK_HOME=$ndk_path"
+            echo "ANDROID_NDK_HOME=$ndk_path"
+            echo "ANDROID_NDK_ROOT=$ndk_path"
+          } >> "$GITHUB_ENV"
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
