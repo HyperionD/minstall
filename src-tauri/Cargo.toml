@@ -1,6 +1,6 @@
 [package]
 name = "minstall"
-version = "0.1.0"
+version = "0.2.0"
 description = "小米手环 10 Pro 表盘直装工具（蓝牙直连，不经过官方 App）"
 authors = ["minstall contributors"]
 edition = "2021"
