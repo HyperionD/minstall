@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 
 use crate::ble::connection::Manager;
 use crate::ble::scanner;
-use crate::protocol::{auth, watchface};
+use crate::protocol::{auth, quickapp, watchface};
 
 pub type SharedManager = Arc<Mutex<Manager>>;
 
@@ -59,9 +59,7 @@ pub async fn authenticate(state: State<'_, SharedManager>, authkey: String) -> R
 
 /// 查询手环存储使用（需已连接并认证）。
 #[tauri::command]
-pub async fn get_storage_info(
-    state: State<'_, SharedManager>,
-) -> Result<StorageInfo, String> {
+pub async fn get_storage_info(state: State<'_, SharedManager>) -> Result<StorageInfo, String> {
     let mut mgr = state.inner().lock().await;
     let session = match mgr.session() {
         Ok(s) => s,
@@ -170,7 +168,46 @@ pub async fn install_watchface(
             "install:progress",
             serde_json::json!({ "sent": sent, "total": total }),
         );
-        eprintln!("[minstall] emit install:progress sent={sent} total={total} ok={}", r.is_ok());
+        eprintln!(
+            "[minstall] emit install:progress sent={sent} total={total} ok={}",
+            r.is_ok()
+        );
+    })
+    .await;
+    mgr.advance_seq(seq);
+    result.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn install_quick_app(
+    app: AppHandle,
+    state: State<'_, SharedManager>,
+    rpk_path: String,
+) -> Result<watchface::PushOutcome, String> {
+    let mut mgr = state.inner().lock().await;
+    let session = mgr.session().map_err(|e| e.to_string())?;
+    let mut seq = mgr.seq();
+    let stream = mgr.stream_mut().map_err(|e| e.to_string())?;
+    #[cfg(target_os = "android")]
+    let data = {
+        let name = rpk_path.clone();
+        tokio::task::spawn_blocking(move || crate::ble::file_picker_android::read_bytes(&name))
+            .await
+            .map_err(|e| format!("读取快应用任务失败: {e}"))?
+            .map_err(|e| e.to_string())?
+    };
+    #[cfg(not(target_os = "android"))]
+    let data = std::fs::read(&rpk_path).map_err(|e| format!("读取快应用文件失败: {e}"))?;
+
+    let result = quickapp::push(stream, &session, data, &mut seq, |sent, total| {
+        let r = app.emit(
+            "install:progress",
+            serde_json::json!({ "sent": sent, "total": total }),
+        );
+        eprintln!(
+            "[minstall] emit install:progress sent={sent} total={total} ok={}",
+            r.is_ok()
+        );
     })
     .await;
     mgr.advance_seq(seq);
@@ -179,12 +216,31 @@ pub async fn install_watchface(
 
 #[cfg(target_os = "android")]
 #[tauri::command]
-pub async fn pick_watchface_file() -> Result<String, String> {
-    let path = tokio::task::spawn_blocking(|| crate::ble::file_picker_android::pick())
+pub async fn start_file_picker(request_id: u64) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::ble::file_picker_android::launch(request_id))
         .await
-        .map_err(|e| format!("文件选择任务失败: {e}"))?
-        .map_err(|e| e.to_string())?;
-    Ok(path)
+        .map_err(|error| format!("启动文件选择任务失败: {error}"))?
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn get_file_picker_result(
+    request_id: u64,
+) -> Result<crate::ble::file_picker::PickerResult, String> {
+    tokio::task::spawn_blocking(move || crate::ble::file_picker_android::get_result(request_id))
+        .await
+        .map_err(|error| format!("查询文件选择任务失败: {error}"))?
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn ack_file_picker_result(request_id: u64) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || crate::ble::file_picker_android::clear_result(request_id))
+        .await
+        .map_err(|error| format!("清理文件选择任务失败: {error}"))?
+        .map_err(|error| error.to_string())
 }
 
 /// Android authkey 自动读取（剪贴板 + wearablelog 日志）。

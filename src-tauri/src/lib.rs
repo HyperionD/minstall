@@ -21,6 +21,7 @@ pub fn run() {
             commands::authenticate,
             commands::get_storage_info,
             commands::install_watchface,
+            commands::install_quick_app,
             #[cfg(target_os = "linux")]
             commands::get_saved_authkey,
             #[cfg(target_os = "linux")]
@@ -34,7 +35,11 @@ pub fn run() {
             #[cfg(target_os = "android")]
             commands::clear_saved_authkey,
             #[cfg(target_os = "android")]
-            commands::pick_watchface_file,
+            commands::start_file_picker,
+            #[cfg(target_os = "android")]
+            commands::get_file_picker_result,
+            #[cfg(target_os = "android")]
+            commands::ack_file_picker_result,
             #[cfg(target_os = "android")]
             commands::read_authkey,
             #[cfg(target_os = "android")]

@@ -6,9 +6,19 @@ import { open } from "@tauri-apps/plugin-dialog";
 type Device = { name: string; address: string; rssi: number };
 type Progress = { sent: number; total: number };
 type StorageInfo = { used: number; total: number };
+type PickerResult =
+  | { status: "pending" | "missing" }
+  | { status: "selected"; path: string }
+  | { status: "cancelled" }
+  | { status: "error"; message: string };
 
 type Screen = "connect" | "install";
+type InstallKind = "watchface" | "quickapp";
 type WatchState = "idle" | "busy" | "progress" | "ok" | "error";
+
+function isQuickAppPath(path: string): boolean {
+  return /\.rpk$/i.test(path);
+}
 
 function fmtMB(bytes: number): string {
   return (bytes / 1048576).toFixed(2) + " MB";
@@ -89,12 +99,17 @@ function App() {
   const [authkey, setAuthkey] = useState("");
   const [rememberAuthkey, setRememberAuthkey] = useState(false);
   const [binPath, setBinPath] = useState("");
+  const [installKind, setInstallKind] = useState<InstallKind>("watchface");
   const [storage, setStorage] = useState<StorageInfo | null>(null);
   const [progress, setProgress] = useState<Progress>({ sent: 0, total: 0 });
   const [logs, setLogs] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const pickInFlight = useRef(false);
+  const pickerRequestId = useRef(0);
+  const activePickerRequest = useRef<number | null>(null);
   const [watchState, setWatchState] = useState<WatchState>("idle");
   const [watchStatus, setWatchStatus] = useState("等待连接");
 
@@ -103,6 +118,12 @@ function App() {
 
   const setLogsAuto = (fn: (prev: string[]) => string[]) => {
     setLogs(fn);
+  };
+
+  const applyPickedFile = (picked: string) => {
+    setBinPath(picked);
+    setInstallKind(isQuickAppPath(picked) ? "quickapp" : "watchface");
+    setLogsAuto((prev) => [...prev, `已选择文件: ${picked}`]);
   };
 
   // 日志自动滚到底
@@ -172,6 +193,67 @@ function App() {
       un.then((f) => f());
     };
   }, []);
+
+  useEffect(() => {
+    if (!isAndroid || !picking) return;
+    const requestId = activePickerRequest.current;
+    if (requestId === null) return;
+    let stopped = false;
+    let polling = false;
+    let missingCount = 0;
+    const startedAt = Date.now();
+
+    const finish = (result: PickerResult) => {
+      if (stopped || activePickerRequest.current !== requestId) return;
+      if (result.status === "selected") applyPickedFile(result.path);
+      if (result.status === "error") setError(result.message);
+      activePickerRequest.current = null;
+      pickInFlight.current = false;
+      setPicking(false);
+      void invoke("ack_file_picker_result", { requestId });
+    };
+
+    const poll = async () => {
+      if (stopped || polling || document.hidden) return;
+      if (Date.now() - startedAt > 120_000) {
+        finish({ status: "error", message: "文件选择超时，请重试" });
+        return;
+      }
+      polling = true;
+      try {
+        const result = await Promise.race([
+          invoke<PickerResult>("get_file_picker_result", { requestId }),
+          new Promise<never>((_, reject) =>
+            window.setTimeout(() => reject(new Error("查询文件选择结果超时")), 2_000)
+          ),
+        ]);
+        if (result.status === "pending") missingCount = 0;
+        if (result.status === "missing") {
+          missingCount += 1;
+          if (missingCount < 40) return;
+          finish({ status: "error", message: "未找到文件选择请求，请重试" });
+          return;
+        }
+        if (result.status !== "pending") finish(result);
+      } catch {
+        // IPC 可能在系统选择器切换 Activity 时丢失，下一轮继续查询。
+      } finally {
+        polling = false;
+      }
+    };
+
+    const timer = window.setInterval(() => void poll(), 250);
+    const onVisibilityChange = () => {
+      if (!document.hidden) void poll();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    void poll();
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [isAndroid, picking]);
 
   const doScan = async () => {
     setError(null);
@@ -248,27 +330,38 @@ function App() {
   };
 
   const pickFile = async () => {
+    if (pickInFlight.current) return;
+    pickInFlight.current = true;
+    setPicking(true);
+
+    if (isAndroid) {
+      const requestId = ++pickerRequestId.current;
+      activePickerRequest.current = requestId;
+      void invoke("start_file_picker", { requestId }).catch((reason) => {
+        if (activePickerRequest.current !== requestId) return;
+        setError(String(reason));
+        activePickerRequest.current = null;
+        pickInFlight.current = false;
+        setPicking(false);
+      });
+      return;
+    }
+
     try {
-      const isAndroid = /Android/i.test(navigator.userAgent);
-      let picked: string | null = null;
-      if (isAndroid) {
-        picked = await invoke<string>("pick_watchface_file");
-      } else {
-        const r = await open({
-          multiple: false,
-          filters: [
-            { name: "表盘文件", extensions: ["bin", "face"] },
-            { name: "全部文件", extensions: ["*"] },
-          ],
-        });
-        if (typeof r === "string") picked = r;
-      }
-      if (picked) {
-        setBinPath(picked);
-        setLogsAuto((prev) => [...prev, `已选择文件: ${picked}`]);
-      }
-    } catch (e) {
-      setError(String(e));
+      const picked = await open({
+        multiple: false,
+        filters: [
+          { name: "表盘文件", extensions: ["bin", "face"] },
+          { name: "快应用包", extensions: ["rpk"] },
+          { name: "全部文件", extensions: ["*"] },
+        ],
+      });
+      if (typeof picked === "string") applyPickedFile(picked);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      pickInFlight.current = false;
+      setPicking(false);
     }
   };
 
@@ -294,21 +387,26 @@ function App() {
     setWatchState("busy");
     setWatchStatus("准备安装…");
     try {
-      const outcome = await invoke<"confirmed" | "transferred">("install_watchface", {
-        binPath,
-      });
-      const name = binPath.split("/").pop();
+      const outcome = installKind === "quickapp"
+        ? await invoke<"confirmed" | "transferred">("install_quick_app", {
+            rpkPath: binPath,
+          })
+        : await invoke<"confirmed" | "transferred">("install_watchface", {
+            binPath,
+          });
+      const name = binPath.split(/[\\/]/).pop();
+      const label = installKind === "quickapp" ? "快应用" : "表盘";
       if (outcome === "confirmed") {
-        setLogsAuto((prev) => [...prev, "安装完成（手环已确认）"]);
-        setSuccess(`表盘安装成功：${name}`);
+        setLogsAuto((prev) => [...prev, `${label}安装完成（手环已确认）`]);
+        setSuccess(`${label}安装成功：${name}`);
         setWatchState("ok");
         setWatchStatus("安装成功");
       } else {
         setLogsAuto((prev) => [
           ...prev,
-          "表盘传输完成，请在手环上确认是否安装成功",
+          `${label}传输完成，请在手环上确认是否安装成功`,
         ]);
-        setSuccess(`表盘传输成功：${name}，请在手环上确认`);
+        setSuccess(`${label}传输成功：${name}，请在手环上确认`);
         setWatchState("ok");
         setWatchStatus("传输完成");
       }
@@ -341,6 +439,7 @@ function App() {
       await invoke("disconnect");
       setSelected(null);
       setBinPath("");
+      setInstallKind("watchface");
       setStorage(null);
       setProgress({ sent: 0, total: 0 });
       setScreen("connect");
@@ -361,7 +460,7 @@ function App() {
           <span className="masthead__logo">◉</span>
           <div>
             <h1>minstall</h1>
-            <p className="masthead__sub">小米手环 10 Pro · 表盘直装</p>
+            <p className="masthead__sub">小米手环 10 Pro · 表盘 / 快应用直装</p>
           </div>
         </div>
         <div className={`conn-badge conn-badge--${screen === "install" ? "on" : "off"}`}>
@@ -382,9 +481,9 @@ function App() {
             <div>
               <h2>连接手环</h2>
               <p className="step-head__hint">
-                若手环未绑定，请先用官方 App 绑定并提取 authkey。
+                支持安装 .bin / .face 表盘和 .rpk Vela 快应用。
                 <br />
-                可点「自动检测」从导出日志读取 authkey，或手动输入 32 位 hex。
+                若手环未绑定，请先用官方 App 绑定并提取 authkey；可点「自动检测」从导出日志读取 authkey，或手动输入 32 位 hex。
               </p>
             </div>
           </div>
@@ -533,8 +632,12 @@ function App() {
           <div className="step-head">
             <span className="step-head__no">2</span>
             <div>
-              <h2>安装表盘</h2>
-              <p className="step-head__hint">选择 .bin / .face 表盘文件并安装到手环</p>
+              <h2>{installKind === "quickapp" ? "安装快应用" : "安装表盘"}</h2>
+              <p className="step-head__hint">
+                {installKind === "quickapp"
+                  ? "选择 .rpk Vela 快应用包并安装到手环"
+                  : "支持 .bin / .face 表盘和 .rpk Vela 快应用，选择文件后自动识别安装类型"}
+              </p>
             </div>
           </div>
 
@@ -565,19 +668,26 @@ function App() {
 
           <div className="field">
             <label className="field__label" htmlFor="bin-path">
-              表盘文件
+              {installKind === "quickapp" ? "快应用包" : "表盘文件"}
             </label>
             <div className="input-wrap">
               <input
                 id="bin-path"
                 className="input input--mono"
-                placeholder="选择或输入 .bin / .face 文件路径"
+                placeholder={
+                  installKind === "quickapp"
+                    ? "选择或输入 .rpk 文件路径"
+                    : "选择或输入 .bin / .face / .rpk 文件路径"
+                }
                 value={binPath}
-                onChange={(e) => setBinPath(e.target.value)}
+                onChange={(e) => {
+                  setBinPath(e.target.value);
+                  setInstallKind(isQuickAppPath(e.target.value) ? "quickapp" : "watchface");
+                }}
                 spellCheck={false}
               />
-              <button className="btn btn--ghost" onClick={pickFile} disabled={busy}>
-                选择文件…
+              <button className="btn btn--ghost" onClick={pickFile} disabled={busy || picking}>
+                {picking ? "选择器打开中…" : "选择文件…"}
               </button>
             </div>
           </div>
@@ -588,7 +698,7 @@ function App() {
               disabled={!binPath || busy}
               onClick={doInstall}
             >
-              {busy ? "安装中…" : "安装表盘"}
+              {busy ? "安装中…" : installKind === "quickapp" ? "安装快应用" : "安装表盘"}
             </button>
             <button className="btn btn--ghost" onClick={doDisconnect} disabled={busy}>
               断开连接

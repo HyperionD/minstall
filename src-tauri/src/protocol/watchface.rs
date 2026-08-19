@@ -25,7 +25,9 @@ pub fn chunk_data(data: &[u8], size: usize) -> Vec<&[u8]> {
 /// 从表盘 bin 提取 id（offset 0x28 起 null-terminated ASCII，须匹配 `^\d+$`；协议笔记 6 节）。
 pub fn parse_watchface_id(data: &[u8]) -> Result<String, BleError> {
     if data.len() < 0x40 || data[0] != 0x5A || data[1] != 0xA5 {
-        return Err(BleError::FileError("非法表盘文件：头部 magic 应为 5A A5".into()));
+        return Err(BleError::FileError(
+            "非法表盘文件：头部 magic 应为 5A A5".into(),
+        ));
     }
     let start = 0x28usize;
     let end = data[start..]
@@ -34,8 +36,12 @@ pub fn parse_watchface_id(data: &[u8]) -> Result<String, BleError> {
         .map(|p| start + p)
         .unwrap_or_else(|| (start + 32).min(data.len()));
     let id_bytes = &data[start..end];
-    let id_str = std::str::from_utf8(id_bytes)
-        .map_err(|_| BleError::FileError(format!("表盘 id 非 ASCII: {:?}", &id_bytes[..id_bytes.len().min(16)])))?;
+    let id_str = std::str::from_utf8(id_bytes).map_err(|_| {
+        BleError::FileError(format!(
+            "表盘 id 非 ASCII: {:?}",
+            &id_bytes[..id_bytes.len().min(16)]
+        ))
+    })?;
     if !id_str.chars().all(|c| c.is_ascii_digit()) {
         return Err(BleError::FileError(format!("表盘 id 应为数字: {id_str:?}")));
     }
@@ -70,11 +76,19 @@ pub fn parse_watchface_name(data: &[u8]) -> String {
 /// 构造 MASS 分片（纯函数，同 POC build_mass_frames）。
 /// 返回 (frames, total_parts, with_crc)。
 pub fn build_mass_frames(data: &[u8], slice_length: usize) -> (Vec<Vec<u8>>, usize, Vec<u8>) {
+    build_mass_frames_with_type(data, slice_length, MASS_DATA_TYPE)
+}
+
+pub(crate) fn build_mass_frames_with_type(
+    data: &[u8],
+    slice_length: usize,
+    data_type: u8,
+) -> (Vec<Vec<u8>>, usize, Vec<u8>) {
     // MD5（16B）用于 MassPacket data_id；crc32 用于尾部校验，均手写实现（见下文）。
     let md5 = md5(data);
 
     let mut framed = vec![0x00u8]; // comp_data 版本 0
-    framed.push(MASS_DATA_TYPE);
+    framed.push(data_type);
     framed.extend_from_slice(&md5);
     framed.extend_from_slice(&(data.len() as u32).to_le_bytes());
     framed.extend_from_slice(data);
@@ -90,7 +104,7 @@ pub fn build_mass_frames(data: &[u8], slice_length: usize) -> (Vec<Vec<u8>>, usi
         let fragment = &with_crc[start..end];
         let mut header = Vec::with_capacity(6 + fragment.len());
         header.push(CHANNEL_DATA); // channel=2 (Mass, 明文)
-        header.push(1);            // op=1 (Write)
+        header.push(1); // op=1 (Write)
         header.extend_from_slice(&(total_parts as u16).to_le_bytes());
         header.extend_from_slice(&((i + 1) as u16).to_le_bytes()); // cur 从 1 起
         header.extend_from_slice(fragment);
@@ -103,20 +117,22 @@ pub fn build_mass_frames(data: &[u8], slice_length: usize) -> (Vec<Vec<u8>>, usi
 // MD5（RFC 1321 实现，16 字节输出；MassPacket data_id 要求）
 // ---------------------------------------------------------------------------
 
-fn md5(data: &[u8]) -> [u8; 16] {
+pub(crate) fn md5(data: &[u8]) -> [u8; 16] {
     const S: [u32; 64] = [
-        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9,
-        14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15,
-        21, 6, 10, 15, 21,
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
+        9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
+        15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
     ];
     const K: [u32; 64] = [
-        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501, 0x698098d8,
-        0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821, 0xf61e2562, 0xc040b340,
-        0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8, 0x21e1cde6, 0xc33707d6, 0xf4d50d87,
-        0x455a14ed, 0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a, 0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c,
-        0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70, 0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05, 0xd9d4d039,
-        0xe6db99e5, 0x1fa27cf8, 0xc4ac5665, 0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92,
-        0xffeff47d, 0x85845dd1, 0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb,
+        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613,
+        0xfd469501, 0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193,
+        0xa679438e, 0x49b40821, 0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d,
+        0x02441453, 0xd8a1e681, 0xe7d3fbc8, 0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed,
+        0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a, 0xfffa3942, 0x8771f681, 0x6d9d6122,
+        0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70, 0x289b7ec6, 0xeaa127fa,
+        0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665, 0xf4292244,
+        0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+        0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb,
         0xeb86d391,
     ];
     let mut a0: u32 = 0x67452301;
@@ -149,7 +165,10 @@ fn md5(data: &[u8]) -> [u8; 16] {
             d = c;
             c = b;
             b = b.wrapping_add(
-                a.wrapping_add(f).wrapping_add(K[i]).wrapping_add(m[g]).rotate_left(S[i]),
+                a.wrapping_add(f)
+                    .wrapping_add(K[i])
+                    .wrapping_add(m[g])
+                    .rotate_left(S[i]),
             );
             a = tmp;
         }
@@ -175,14 +194,18 @@ fn crc32(data: &[u8]) -> u32 {
     for &b in data {
         crc ^= b as u32;
         for _ in 0..8 {
-            crc = if crc & 1 == 1 { (crc >> 1) ^ 0xEDB88320 } else { crc >> 1 };
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xEDB88320
+            } else {
+                crc >> 1
+            };
         }
     }
     !crc
 }
 
 /// 从 Data 帧 payload 提取 PROTOBUF 通道明文（若为加密则解密）。
-fn protobuf_body(payload: &[u8], session: &Session) -> Option<Vec<u8>> {
+pub(crate) fn protobuf_body(payload: &[u8], session: &Session) -> Option<Vec<u8>> {
     if payload.len() < 2 {
         return None;
     }
@@ -265,13 +288,20 @@ where
         let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs);
         loop {
             if tokio::time::Instant::now() >= deadline {
-                return Err(BleError::PushFailed { chunk: 0, detail: format!("等待 {label} 超时") });
+                return Err(BleError::PushFailed {
+                    chunk: 0,
+                    detail: format!("等待 {label} 超时"),
+                });
             }
             // 单次读取至多等 200ms（read 无数据时永久阻塞，必须限时）
-            match tokio::time::timeout(std::time::Duration::from_millis(200), ch.read_more()).await {
+            match tokio::time::timeout(std::time::Duration::from_millis(200), ch.read_more()).await
+            {
                 Ok(Ok(true)) => {}
                 Ok(Ok(false)) => {
-                    return Err(BleError::PushFailed { chunk: 0, detail: format!("等待 {label} 期间 SPP 断开") })
+                    return Err(BleError::PushFailed {
+                        chunk: 0,
+                        detail: format!("等待 {label} 期间 SPP 断开"),
+                    })
                 }
                 Ok(Err(e)) => return Err(BleError::ConnectFailed(e)),
                 Err(_) => continue, // 无数据，回到循环检查 deadline
@@ -293,8 +323,17 @@ where
     }
 
     // 1) WatchFace PREPARE_INSTALL（加密通道）
-    send_enc(&mut ch, session, &mut seq, &encode_watchface_prepare(&watchface_id, data.len() as u32)).await?;
-    eprintln!("[minstall] → WatchFace PREPARE_INSTALL id={watchface_id} size={}", data.len());
+    send_enc(
+        &mut ch,
+        session,
+        &mut seq,
+        &encode_watchface_prepare(&watchface_id, data.len() as u32),
+    )
+    .await?;
+    eprintln!(
+        "[minstall] → WatchFace PREPARE_INSTALL id={watchface_id} size={}",
+        data.len()
+    );
     let wp = wait_wp(
         &mut ch,
         session,
@@ -308,12 +347,24 @@ where
     )
     .await?;
     if wp.prepare_status != Some(0) {
-        return Err(BleError::PushFailed { chunk: 0, detail: format!("WatchFace prepare_status={:?}（非 READY）", wp.prepare_status) });
+        return Err(BleError::PushFailed {
+            chunk: 0,
+            detail: format!(
+                "WatchFace prepare_status={:?}（非 READY）",
+                wp.prepare_status
+            ),
+        });
     }
 
     // 2) Mass PREPARE（加密通道，data_id=md5）
     let md5 = md5(&data);
-    send_enc(&mut ch, session, &mut seq, &encode_mass_prepare(&md5, data.len() as u32)).await?;
+    send_enc(
+        &mut ch,
+        session,
+        &mut seq,
+        &encode_mass_prepare(&md5, data.len() as u32),
+    )
+    .await?;
     eprintln!("[minstall] → Mass PREPARE type=16 size={}", data.len());
     let wp = wait_wp(
         &mut ch,
@@ -328,7 +379,10 @@ where
     )
     .await?;
     if wp.prepare_status != Some(0) {
-        return Err(BleError::PushFailed { chunk: 0, detail: format!("Mass prepare_status={:?}（非 READY）", wp.prepare_status) });
+        return Err(BleError::PushFailed {
+            chunk: 0,
+            detail: format!("Mass prepare_status={:?}（非 READY）", wp.prepare_status),
+        });
     }
     let slice_length = wp.slice_length.unwrap_or(DEFAULT_SLICE_LENGTH);
     eprintln!("[minstall] expected_slice_length={slice_length}");
@@ -354,7 +408,10 @@ where
         let batch_end = (idx + batch).min(total);
         for (j, frame_payload) in frames.iter().enumerate().take(batch_end).skip(idx) {
             let frame = encode_v2_frame(V2_PACKET_DATA, data_seq, frame_payload);
-            ch.write(&frame).await.map_err(|e| BleError::PushFailed { chunk: j, detail: e })?;
+            ch.write(&frame).await.map_err(|e| BleError::PushFailed {
+                chunk: j,
+                detail: e,
+            })?;
             data_seq = data_seq.wrapping_add(1);
         }
         // 等这批最后一块的 ACK（必须等到，否则手环丢数据）
@@ -365,16 +422,25 @@ where
         idx = batch_end;
         let sent = (with_crc.len() * idx / total).min(total_bytes);
         on_progress(sent, total_bytes);
-        eprintln!("[minstall] MASS {idx}/{total} ({sent}B) ack_wait={:?}", t_ack.elapsed());
+        eprintln!(
+            "[minstall] MASS {idx}/{total} ({sent}B) ack_wait={:?}",
+            t_ack.elapsed()
+        );
     }
-    eprintln!("[minstall] MASS 上传完成 {total} 块 耗时 {:?}", t_upload.elapsed());
+    eprintln!(
+        "[minstall] MASS 上传完成 {total} 块 耗时 {:?}",
+        t_upload.elapsed()
+    );
     seq = data_seq; // 上传后的下一个 seq（结尾统一写回 seq_ref）
     let avg_wait = if ack_waits.is_empty() {
         0.0
     } else {
         ack_waits.iter().map(|d| d.as_secs_f64()).sum::<f64>() / ack_waits.len() as f64
     };
-    eprintln!("[minstall] 平均每批 ACK 等待 {avg_wait:.3}s（共 {} 批）", ack_waits.len());
+    eprintln!(
+        "[minstall] 平均每批 ACK 等待 {avg_wait:.3}s（共 {} 批）",
+        ack_waits.len()
+    );
 
     // 4) 确认安装结果：等手环推送 InstallResult（id=5，code 2/3 成功）短时间；
     //    手环经常不推（真机多次验证），故仅短等待，未收到即返回「已传输」，
@@ -433,7 +499,10 @@ where
 {
     let frame = build_protobuf_frame(*seq, &encode_get_installed_list(), true, &session.enc_key);
     *seq = seq.wrapping_add(1);
-    eprintln!("[minstall] GET_INSTALLED_LIST 发送 seq={}", seq.wrapping_sub(1));
+    eprintln!(
+        "[minstall] GET_INSTALLED_LIST 发送 seq={}",
+        seq.wrapping_sub(1)
+    );
     if ch.write(&frame).await.is_err() {
         eprintln!("[minstall] GET_INSTALLED_LIST 写入失败");
         return vec![];
@@ -459,10 +528,15 @@ where
             if let Some(body) = protobuf_body(&payload, session) {
                 if let Some(wp) = parse_wear_packet(&body) {
                     eprintln!("[minstall] 收到 WearPacket typ={:?} id={:?}", wp.typ, wp.id);
-                    if wp.typ == Some(WEARPACKET_TYPE_WATCH_FACE) && wp.id == Some(WP_ID_GET_INSTALLED_LIST) {
+                    if wp.typ == Some(WEARPACKET_TYPE_WATCH_FACE)
+                        && wp.id == Some(WP_ID_GET_INSTALLED_LIST)
+                    {
                         let ids = parse_watchface_list(&body);
                         eprintln!("[minstall] 解析到 {} 个表盘: {:?}", ids.len(), ids);
-                        eprintln!("[minstall] 原始响应 body hex (前 256B): {}", hex_prefix(&body, 256));
+                        eprintln!(
+                            "[minstall] 原始响应 body hex (前 256B): {}",
+                            hex_prefix(&body, 256)
+                        );
                         return ids;
                     }
                 }
@@ -518,7 +592,10 @@ where
         tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
     }
     drop(ch);
-    result.ok_or_else(|| BleError::PushFailed { chunk: 0, detail: "存储查询超时或响应异常".into() })
+    result.ok_or_else(|| BleError::PushFailed {
+        chunk: 0,
+        detail: "存储查询超时或响应异常".into(),
+    })
 }
 
 /// 解析存储响应：WearPacket{type=2, id=62} → System(field 4) → storage_info(field 44) → {used=1, total=2}。
@@ -554,7 +631,7 @@ fn parse_storage_info(body: &[u8]) -> Option<(u64, u64)> {
 /// 读取直到收到指定 seq 的 ACK（期间回手环推送的 ACK）。
 /// 必须等到 ACK 才能继续：手环处理慢（真机 ~18KB/s，BATCH=2 每批 ~1.3s），
 /// 超时继续会导致手环丢数据（表盘损坏）。
-async fn drain_until_ack<S>(
+pub(crate) async fn drain_until_ack<S>(
     ch: &mut SppChannel<'_, S>,
     seq_target: u8,
 ) -> Result<(), BleError>
@@ -562,32 +639,41 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(60);
+    let mut keep: Vec<(u8, u8, Vec<u8>)> = Vec::new();
     loop {
         if tokio::time::Instant::now() >= deadline {
-            return Err(BleError::PushFailed { chunk: 0, detail: format!("等待 seq={seq_target} ACK 超时") });
+            return Err(BleError::PushFailed {
+                chunk: 0,
+                detail: format!("等待 seq={seq_target} ACK 超时"),
+            });
         }
         // 单次读取至多等 200ms（read 无数据时永久阻塞，必须限时）
         match tokio::time::timeout(std::time::Duration::from_millis(200), ch.read_more()).await {
             Ok(Ok(true)) => {}
             Ok(Ok(false)) => {
-                return Err(BleError::PushFailed { chunk: 0, detail: "等待 ACK 期间 SPP 断开".into() })
+                return Err(BleError::PushFailed {
+                    chunk: 0,
+                    detail: "等待 ACK 期间 SPP 断开".into(),
+                })
             }
             Ok(Err(e)) => return Err(BleError::ConnectFailed(e)),
             Err(_) => continue,
         }
         let frames = ch.drain_ack().await.map_err(BleError::ConnectFailed)?;
-        // 保留非 ACK 的 Data 帧（如 InstallResult 可能随 ACK 一起到达），
-        // 匹配到目标 ACK 时重新塞回累积器供后续 wait_wp 读取——否则会被消费丢弃。
-        let mut keep: Vec<(u8, u8, Vec<u8>)> = Vec::new();
+        // 保留所有非 ACK 的 Data 帧（如 InstallResult 可能在目标 ACK 前后到达），
+        // 匹配到目标 ACK 时重新塞回累积器供后续 wait_wp 读取。
+        let mut target_received = false;
         for (pt, seq, payload) in frames {
             if pt == V2_PACKET_ACK && seq == seq_target {
-                ch.acc.requeue(&keep);
-                eprintln!("[minstall] ACK seq={seq} 已收到");
-                return Ok(());
-            }
-            if pt == V2_PACKET_DATA {
+                target_received = true;
+            } else if pt == V2_PACKET_DATA {
                 keep.push((pt, seq, payload));
             }
+        }
+        if target_received {
+            ch.acc.requeue(&keep);
+            eprintln!("[minstall] ACK seq={seq_target} 已收到");
+            return Ok(());
         }
         tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
     }
@@ -597,11 +683,34 @@ where
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn drain_until_ack_preserves_data_after_target_ack() {
+        use tokio::io::AsyncWriteExt;
+
+        let (mut peer, mut stream) = tokio::io::duplex(4096);
+        let target_ack = encode_v2_frame(V2_PACKET_ACK, 7, &[]);
+        let install_result = encode_v2_frame(V2_PACKET_DATA, 8, b"install-result");
+        peer.write_all(&[target_ack, install_result].concat())
+            .await
+            .unwrap();
+
+        let mut channel = SppChannel::new(&mut stream);
+        drain_until_ack(&mut channel, 7).await.unwrap();
+
+        assert_eq!(
+            channel.acc.drain(),
+            vec![(V2_PACKET_DATA, 8, b"install-result".to_vec())]
+        );
+    }
+
     #[test]
     fn chunks_data_by_size() {
         let data = b"abcdef";
         let out = chunk_data(data, 2);
-        assert_eq!(out, vec![b"ab".as_slice(), b"cd".as_slice(), b"ef".as_slice()]);
+        assert_eq!(
+            out,
+            vec![b"ab".as_slice(), b"cd".as_slice(), b"ef".as_slice()]
+        );
     }
 
     #[test]
@@ -613,8 +722,14 @@ mod tests {
     #[test]
     fn md5_known_vectors() {
         let md5_bytes = |d: &[u8]| -> Vec<u8> { md5(d).to_vec() };
-        assert_eq!(md5_bytes(b""), hex_decode("d41d8cd98f00b204e9800998ecf8427e"));
-        assert_eq!(md5_bytes(b"abc"), hex_decode("900150983cd24fb0d6963f7d28e17f72"));
+        assert_eq!(
+            md5_bytes(b""),
+            hex_decode("d41d8cd98f00b204e9800998ecf8427e")
+        );
+        assert_eq!(
+            md5_bytes(b"abc"),
+            hex_decode("900150983cd24fb0d6963f7d28e17f72")
+        );
         assert_eq!(
             md5_bytes(b"The quick brown fox jumps over the lazy dog"),
             hex_decode("9e107d9d372bb6826bd81d3542a419d6")
@@ -648,7 +763,10 @@ mod tests {
         assert_eq!(merged, with_crc);
         // 尾部 crc32
         let body = &with_crc[..with_crc.len() - 4];
-        assert_eq!(u32::from_le_bytes(with_crc[with_crc.len() - 4..].try_into().unwrap()), crc32(body));
+        assert_eq!(
+            u32::from_le_bytes(with_crc[with_crc.len() - 4..].try_into().unwrap()),
+            crc32(body)
+        );
     }
 
     #[test]

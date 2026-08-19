@@ -1,147 +1,176 @@
 package com.minstall.app
 
-import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.Log
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
+import org.json.JSONObject
 
-/**
- * Android 文件选择（SAF）：用系统文档选择器选表盘文件。
- *
- * 设计：**不复制到 app 缓存**——对选中的 content:// URI 做持久授权（takePersistableUriPermission），
- * 记录「原始文件名 → URI」映射到 SharedPreferences；安装时按原始文件名经 JNI 直接读 URI 字节流，
- * 因此前端显示/日志保留原始表盘文件名（如 芙宁娜表盘.bin），不产生缓存副本。
- *
- * 被 Rust 通过 JNI 调用（pick / readBytes）。pick 阻塞等待用户选择（最长 2 分钟）。
- */
+/** Android SAF 文件选择与持久结果邮箱。 */
 object BleFilePicker {
-    private const val REQ_PICK = 1002
     private const val TAG = "BleFilePicker"
     private const val PREFS = "picker_prefs"
     private const val PREFIX_URI = "uri_"
+    private const val PREFIX_RESULT = "picker_result_"
+    private const val KEY_ACTIVE_REQUEST = "picker_active_request"
+    private const val KEY_ACTIVE_STARTED_AT = "picker_active_started_at"
+    private const val REQUEST_TIMEOUT_MS = 120_000L
+    private const val NO_REQUEST = -1L
 
-    @Volatile
-    private var pending = false
-
-    @Volatile
-    private var pickResult: String? = null
-
-    /** 每次 pick() 新建（countDown 后必须重置，否则第二次 await 立即返回旧值）。 */
-    @Volatile
-    private var latch: CountDownLatch = CountDownLatch(1)
-
-    /**
-     * 选择表盘文件，持久授权 URI，返回**原始文件名**（不含路径）；取消/失败返回空串。
-     * 文件名作为 readBytes 的键，映射保存在 SharedPreferences。
-     */
+    /** 启动选择器后立即返回；结果由 getResult(requestId) 查询。 */
     @JvmStatic
-    fun pick(): String {
+    fun launch(requestId: Long): Boolean {
         val activity = MainActivity.instance
-            ?: run { Log.e(TAG, "MainActivity.instance == null"); return "" }
-        pickResult = null
-        pending = true
-        latch = CountDownLatch(1)
+            ?: run { Log.e(TAG, "MainActivity.instance == null"); return false }
+        val ctx = AppContext.ctx ?: return false
+        synchronized(this) {
+            val prefs = getPrefs(ctx)
+            if (hasLiveRequest(prefs)) {
+                Log.w(TAG, "已有文件选择请求进行中")
+                return false
+            }
+            prefs.edit()
+                .putLong(KEY_ACTIVE_REQUEST, requestId)
+                .putLong(KEY_ACTIVE_STARTED_AT, System.currentTimeMillis())
+                .putString(resultKey(requestId), resultJson("pending"))
+                .commit()
+        }
         activity.runOnUiThread {
             try {
-                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                    type = "*/*"
-                    putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/octet-stream", "application/x-watchface", "*/*"))
-                    putExtra(Intent.EXTRA_ALLOW_MULTIPLE, false)
-                }
-                activity.startActivityForResult(intent, REQ_PICK)
-            } catch (e: Exception) {
-                Log.e(TAG, "startActivityForResult failed: $e")
-                pickResult = ""
-                pending = false
-                latch.countDown()
+                activity.launchFilePicker()
+            } catch (error: Exception) {
+                completeWithError(requestId, "启动文件选择器失败: ${error.message}")
             }
+        }
+        return true
+    }
+
+    /** Activity Result 回调入口。 */
+    fun complete(uri: Uri?) {
+        val ctx = AppContext.ctx ?: return
+        val requestId = getPrefs(ctx).getLong(KEY_ACTIVE_REQUEST, NO_REQUEST)
+        if (requestId == NO_REQUEST) {
+            Log.w(TAG, "忽略没有对应请求的文件选择结果")
+            return
+        }
+        if (uri == null) {
+            saveTerminalResult(ctx, requestId, resultJson("cancelled"))
+            return
         }
         try {
-            latch.await(2, TimeUnit.MINUTES)
-        } catch (_: InterruptedException) {}
-        pending = false
-        return pickResult ?: ""
+            val name = persistAndGetName(ctx, uri)
+            saveTerminalResult(ctx, requestId, resultJson("selected", "path", name))
+            Log.i(TAG, "已持久授权并记录: $name (requestId=$requestId)")
+        } catch (error: Exception) {
+            completeWithError(requestId, "保存所选文件失败: ${error.message}")
+        }
     }
 
-    /** MainActivity.onActivityResult 回调入口。 */
+    /** 返回持久状态；读取不会删除，避免查询响应丢失。 */
     @JvmStatic
-    fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        if (requestCode != REQ_PICK) return
-        pickResult = if (resultCode == Activity.RESULT_OK && data?.data != null) {
-            persistAndGetName(data.data!!)
-        } else {
-            "" // 用户取消
-        }
-        latch.countDown()
+    fun getResult(requestId: Long): String {
+        val ctx = AppContext.ctx ?: return resultJson("error", "message", "AppContext 未初始化")
+        return getPrefs(ctx).getString(resultKey(requestId), null) ?: resultJson("missing")
     }
 
-    /** 持久授权 URI 并返回原始文件名。 */
-    private fun persistAndGetName(uri: Uri): String {
-        val ctx = AppContext.ctx ?: return ""
-        return try {
-            // 持久授权：App 重启后仍可读（用户授权一次）
-            ctx.contentResolver.takePersistableUriPermission(
-                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
-            val name = queryDisplayName(ctx, uri) ?: "watchface_${System.currentTimeMillis()}.bin"
-            // 覆盖同名旧映射
-            getPrefs(ctx).edit().putString(PREFIX_URI + name, uri.toString()).apply()
-            Log.i(TAG, "已持久授权并记录: $name")
-            name
-        } catch (e: Exception) {
-            Log.e(TAG, "持久授权失败: ${e.message}")
-            ""
-        }
-    }
-
-    /** 查询 SAF URI 的原始文件名。 */
-    private fun queryDisplayName(ctx: Context, uri: Uri): String? {
-        return try {
-            val c = ctx.contentResolver.query(
-                uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null
-            )
-            c?.use {
-                if (it.moveToFirst()) {
-                    it.getString(0)
-                } else null
+    /** 前端成功处理结果后确认消费。 */
+    @JvmStatic
+    fun clearResult(requestId: Long) {
+        val ctx = AppContext.ctx ?: return
+        synchronized(this) {
+            val prefs = getPrefs(ctx)
+            val editor = prefs.edit().remove(resultKey(requestId))
+            if (prefs.getLong(KEY_ACTIVE_REQUEST, NO_REQUEST) == requestId) {
+                editor.remove(KEY_ACTIVE_REQUEST).remove(KEY_ACTIVE_STARTED_AT)
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "查询文件名失败: ${e.message}")
-            null
+            editor.commit()
         }
     }
 
-    /**
-     * 按原始文件名读取表盘字节（Rust JNI 调用）。
-     * 优先查持久授权 URI 映射；否则尝试当普通文件路径读取（手动输入场景）。
-     * 返回 null 表示失败（读不到）。
-     */
+    /** 按原始文件名读取持久授权 URI，供 Rust 安装流程使用。 */
     @JvmStatic
     fun readBytes(name: String): ByteArray? {
         val ctx = AppContext.ctx ?: return null
-        // 1. SAF 持久授权 URI
-        val uriStr = getPrefs(ctx).getString(PREFIX_URI + name, null)
-        if (uriStr != null) {
+        val uriString = getPrefs(ctx).getString(PREFIX_URI + name, null)
+        if (uriString != null) {
             return try {
-                ctx.contentResolver.openInputStream(Uri.parse(uriStr))?.use { it.readBytes() }
-            } catch (e: Exception) {
-                Log.w(TAG, "读取 URI 失败($name): ${e.message}")
+                ctx.contentResolver.openInputStream(Uri.parse(uriString))?.use { it.readBytes() }
+            } catch (error: Exception) {
+                Log.w(TAG, "读取 URI 失败($name): ${error.message}")
                 null
             }
         }
-        // 2. 普通文件路径（手动输入）
         return try {
             java.io.File(name).readBytes()
-        } catch (e: Exception) {
-            Log.w(TAG, "读取文件失败($name): ${e.message}")
+        } catch (error: Exception) {
+            Log.w(TAG, "读取文件失败($name): ${error.message}")
             null
         }
     }
+
+    private fun persistAndGetName(ctx: Context, uri: Uri): String {
+        ctx.contentResolver.takePersistableUriPermission(
+            uri,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION,
+        )
+        val name = queryDisplayName(ctx, uri) ?: "selected_${System.currentTimeMillis()}"
+        getPrefs(ctx).edit().putString(PREFIX_URI + name, uri.toString()).commit()
+        return name
+    }
+
+    private fun queryDisplayName(ctx: Context, uri: Uri): String? {
+        return ctx.contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.DISPLAY_NAME),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        }
+    }
+
+    private fun completeWithError(requestId: Long, message: String) {
+        val ctx = AppContext.ctx ?: return
+        Log.e(TAG, "$message (requestId=$requestId)")
+        saveTerminalResult(ctx, requestId, resultJson("error", "message", message))
+    }
+
+    private fun saveTerminalResult(ctx: Context, requestId: Long, result: String) {
+        synchronized(this) {
+            getPrefs(ctx).edit()
+                .putString(resultKey(requestId), result)
+                .remove(KEY_ACTIVE_REQUEST)
+                .remove(KEY_ACTIVE_STARTED_AT)
+                .commit()
+        }
+    }
+
+    private fun hasLiveRequest(prefs: SharedPreferences): Boolean {
+        val activeRequest = prefs.getLong(KEY_ACTIVE_REQUEST, NO_REQUEST)
+        if (activeRequest == NO_REQUEST) return false
+        val startedAt = prefs.getLong(KEY_ACTIVE_STARTED_AT, 0L)
+        if (System.currentTimeMillis() - startedAt <= REQUEST_TIMEOUT_MS) return true
+        prefs.edit()
+            .putString(
+                resultKey(activeRequest),
+                resultJson("error", "message", "文件选择请求已超时"),
+            )
+            .remove(KEY_ACTIVE_REQUEST)
+            .remove(KEY_ACTIVE_STARTED_AT)
+            .commit()
+        return false
+    }
+
+    private fun resultJson(status: String, key: String? = null, value: String? = null): String {
+        val json = JSONObject().put("status", status)
+        if (key != null) json.put(key, value ?: "")
+        return json.toString()
+    }
+
+    private fun resultKey(requestId: Long) = PREFIX_RESULT + requestId
 
     private fun getPrefs(ctx: Context): SharedPreferences =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

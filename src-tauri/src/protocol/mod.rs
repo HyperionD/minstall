@@ -3,4 +3,5 @@
 pub mod auth;
 pub mod consts;
 pub mod encoding;
+pub mod quickapp;
 pub mod watchface;

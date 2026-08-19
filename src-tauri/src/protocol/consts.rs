@@ -8,7 +8,9 @@ pub const SPP_SERVICE_UUID: &str = "00001101-0000-1000-8000-00805f9b34fb";
 /// RFCOMM 通道号（协议笔记 4.3/4.5 节，真机确认 = 5）
 pub const RFCOMM_CHANNEL: u8 = 5;
 /// V1 Hello 帧（协议笔记 4.3 节：SPP 连接后必须先行发送，手环回版本帧确认通道）
-pub const V1_HELLO: &[u8] = &[0xba, 0xdc, 0xfe, 0x00, 0xc0, 0x03, 0x00, 0x00, 0x01, 0x00, 0xef];
+pub const V1_HELLO: &[u8] = &[
+    0xba, 0xdc, 0xfe, 0x00, 0xc0, 0x03, 0x00, 0x00, 0x01, 0x00, 0xef,
+];
 
 // ---- V2 帧格式（协议笔记 4 节）----
 /// 帧头 preamble（2 字节）
@@ -53,6 +55,10 @@ pub const WEARPACKET_TYPE_ACCOUNT: u8 = 1;
 pub const WEARPACKET_TYPE_SYSTEM: u8 = 2;
 /// type=WATCH_FACE
 pub const WEARPACKET_TYPE_WATCH_FACE: u8 = 4;
+/// type=THIRDPARTY_APP（快应用）。
+pub const WEARPACKET_TYPE_THIRDPARTY_APP: u8 = 20;
+/// WearPacket payload oneof 中 ThirdpartyApp 的字段号。
+pub const WEARPACKET_PAYLOAD_THIRDPARTY_APP: u8 = 22;
 /// type=MASS（注意：WearPacket.type=22，而 payload oneof 字段 Mass=24 —— 两个不同概念，见 WEARPACKET_PAYLOAD_MASS）
 pub const WEARPACKET_TYPE_MASS: u8 = 22;
 /// WearPacket payload oneof 中 Mass 的字段号 = 24（非 7！字段编号见协议笔记 5 节）
@@ -62,6 +68,10 @@ pub const WEARPACKET_PAYLOAD_MASS: u8 = 24;
 pub const WP_ID_GET_INSTALLED_LIST: u8 = 0;
 /// id=PREPARE_INSTALL_WATCH_FACE
 pub const WP_ID_PREPARE_INSTALL_WATCH_FACE: u8 = 4;
+/// 快应用 id=PREPARE_INSTALL_APP。
+pub const WP_ID_PREPARE_INSTALL_APP: u8 = 1;
+/// 快应用 id=REPORT_INSTALL_RESULT。
+pub const WP_ID_REPORT_INSTALL_APP_RESULT: u8 = 2;
 /// id=REPORT_INSTALL_RESULT
 pub const WP_ID_REPORT_INSTALL_RESULT: u8 = 5;
 /// id=GET_STORAGE_INFO
@@ -72,6 +82,8 @@ pub const WP_ID_MASS_PREPARE: u8 = 0;
 // ---- MASS 分片上传（协议笔记 5 节，真机确认）----
 /// MassPacket data_type（表盘数据）
 pub const MASS_DATA_TYPE: u8 = 16;
+/// MassPacket data_type（第三方快应用数据）
+pub const MASS_DATA_TYPE_THIRDPARTY_APP: u8 = 64;
 /// MASS 帧头开销：L2 头 2B + total u16 + cur u16（4B）= 6B；fragment = slice_length - 6
 pub const MASS_FRAME_OVERHEAD: usize = 6;
 /// 默认分片长度：协议上由设备 prepare_response.expected_slice_length 给出（真机返回 12288），此处为初始值，运行时以设备返回为准

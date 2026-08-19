@@ -1,15 +1,20 @@
 package com.minstall.app
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 
 class MainActivity : TauriActivity() {
+  private val filePickerLauncher =
+    registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+      BleFilePicker.complete(uri)
+    }
+
   companion object {
     /** 供 BleFilePicker（JNI 线程）启动 SAF 选择器用。 */
     @Volatile
@@ -25,11 +30,16 @@ class MainActivity : TauriActivity() {
     requestBluetoothPermissions()
   }
 
-  /** SAF 文件选择结果转发给 BleFilePicker（JNI 线程在 latch 上等待）。 */
-  @Deprecated("Deprecated in Java")
-  override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-    super.onActivityResult(requestCode, resultCode, data)
-    BleFilePicker.onActivityResult(requestCode, resultCode, data)
+  /** 启动 SAF 文件选择器，结果由 Activity Result API 回传。 */
+  fun launchFilePicker() {
+    filePickerLauncher.launch(
+      arrayOf("application/octet-stream", "application/x-watchface", "application/zip", "*/*")
+    )
+  }
+
+  override fun onDestroy() {
+    if (instance === this) instance = null
+    super.onDestroy()
   }
 
   /** Android 12+ 需要 BLUETOOTH_CONNECT/SCAN；Android <12 需要位置权限。 */

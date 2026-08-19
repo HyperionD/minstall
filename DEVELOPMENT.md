@@ -107,7 +107,24 @@ DATA 包 payload：`[channel u8 低 nibble][opCode u8][body]`
 
 **存储查询**：`WearPacket{type=SYSTEM(2), id=GET_STORAGE_INFO(62)}` → `storage_info=44{used,total}`（真机 used=12.62MB / total=259.38MB）。
 
-### 2.6 Bin 表盘文件格式
+### 2.6 Vela 快应用（`.rpk`）安装
+
+快应用使用独立的 ThirdpartyApp WearPacket，但复用同一 MASS 分片传输：
+
+```
+1. WearPacket{type=20, id=1, thirdparty_app=22{
+     install_request=2{package_name=1, version_code=2, package_size=3}
+   }}（加密）
+2. 等待 ThirdpartyApp install_response=3{prepare_status=1, expected_slice_length=2}
+3. Mass PREPARE（data_type=64）→ MASS 分片上传（每个 MASS 数据帧同样使用 `data_type=64`）
+4. 等待 WearPacket{type=20, id=2, thirdparty_app=22{
+     install_result=4{code=1}
+   }}，code=0 表示 INSTALL_SUCCESS；若设备不推送结果，则查询已安装快应用列表确认包名
+```
+
+`.rpk` 是 ZIP 包，安装前必须能读取 `manifest.json`，且 `deviceTypeList` 包含 `watch`。
+
+### 2.7 Bin 表盘文件格式
 
 - magic：fw[0]=0x5A, fw[1]=0xA5
 - id：offset 0x28 起 null-terminated ASCII 数字串

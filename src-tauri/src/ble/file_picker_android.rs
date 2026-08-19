@@ -1,64 +1,110 @@
-//! Android 文件选择（SAF）：JNI 调 Kotlin BleFilePicker。
-//!
-//! - `pick()`：系统文档选择器选表盘文件，持久授权 URI，返回**原始文件名**（不复制缓存）。
-//! - `read_bytes(name)`：按文件名读字节（持久授权 URI 或普通路径），供协议层安装。
+//! Android SAF 文件选择 JNI 桥。
+//! 选择器为非阻塞启动，结果通过持久邮箱按 request_id 查询。
 
-use jni::objects::JValue;
+use jni::objects::{JObject, JString, JValue};
 
 use super::errors::BleError;
+use super::file_picker::{parse_picker_result, PickerResult};
 
-/// 调 Kotlin BleFilePicker.pick()，返回原始文件名；取消/失败返回空串。
-pub fn pick() -> Result<String, BleError> {
-    let vm = super::connection_android::java_vm_ref()
-        .ok_or_else(|| BleError::ConnectFailed("JavaVM 未初始化（BleRfcomm.init 未调用）".into()))?;
-    let mut env = vm
-        .attach_current_thread()
-        .map_err(|e| BleError::ConnectFailed(format!("JNI attach 失败: {e}")))?;
-    let class = super::connection_android::find_app_class(&mut env, "com/minstall/app/BleFilePicker")?;
-    let name_obj = env
-        .call_static_method(class, "pick", "()Ljava/lang/String;", &[])
-        .map_err(|e| BleError::ConnectFailed(format!("JNI 调 pick 失败: {e}")))?
-        .l()
-        .map_err(|e| BleError::ConnectFailed(format!("JNI 返回值失败: {e}")))?;
-    let name: String = env
-        .get_string(&jni::objects::JString::from(name_obj))
-        .map(|j| j.into())
-        .unwrap_or_default();
-    eprintln!("[minstall] BleFilePicker.pick 返回: '{name}' (len={})", name.len());
-    Ok(name)
+fn request_id_to_jlong(request_id: u64) -> Result<i64, BleError> {
+    i64::try_from(request_id)
+        .map_err(|_| BleError::FileError("文件选择请求 ID 超出 Android 支持范围".into()))
 }
 
-/// 按文件名读取表盘字节（持久授权 URI 或普通路径）。失败返回空 Vec。
-pub fn read_bytes(name: &str) -> Result<Vec<u8>, BleError> {
-    let vm = super::connection_android::java_vm_ref()
-        .ok_or_else(|| BleError::ConnectFailed("JavaVM 未初始化（BleRfcomm.init 未调用）".into()))?;
+pub fn launch(request_id: u64) -> Result<(), BleError> {
+    let vm = super::connection_android::java_vm_ref().ok_or_else(|| {
+        BleError::ConnectFailed("JavaVM 未初始化（BleRfcomm.init 未调用）".into())
+    })?;
     let mut env = vm
         .attach_current_thread()
-        .map_err(|e| BleError::ConnectFailed(format!("JNI attach 失败: {e}")))?;
-    let class = super::connection_android::find_app_class(&mut env, "com/minstall/app/BleFilePicker")?;
-    let jname = env
+        .map_err(|error| BleError::ConnectFailed(format!("JNI attach 失败: {error}")))?;
+    let class =
+        super::connection_android::find_app_class(&mut env, "com/minstall/app/BleFilePicker")?;
+    let request_id = request_id_to_jlong(request_id)?;
+    let started = env
+        .call_static_method(class, "launch", "(J)Z", &[JValue::Long(request_id)])
+        .map_err(|error| BleError::FileError(format!("启动文件选择器失败: {error}")))?
+        .z()
+        .map_err(|error| BleError::FileError(format!("读取文件选择启动状态失败: {error}")))?;
+    if !started {
+        return Err(BleError::FileError("已有文件选择请求进行中".into()));
+    }
+    Ok(())
+}
+
+pub fn get_result(request_id: u64) -> Result<PickerResult, BleError> {
+    let vm = super::connection_android::java_vm_ref().ok_or_else(|| {
+        BleError::ConnectFailed("JavaVM 未初始化（BleRfcomm.init 未调用）".into())
+    })?;
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|error| BleError::ConnectFailed(format!("JNI attach 失败: {error}")))?;
+    let class =
+        super::connection_android::find_app_class(&mut env, "com/minstall/app/BleFilePicker")?;
+    let request_id = request_id_to_jlong(request_id)?;
+    let result = env
+        .call_static_method(
+            class,
+            "getResult",
+            "(J)Ljava/lang/String;",
+            &[JValue::Long(request_id)],
+        )
+        .map_err(|error| BleError::FileError(format!("查询文件选择结果失败: {error}")))?
+        .l()
+        .map_err(|error| BleError::FileError(format!("读取文件选择结果失败: {error}")))?;
+    if result.is_null() {
+        return Ok(PickerResult::Missing);
+    }
+    let raw: String = env
+        .get_string(&JString::from(result))
+        .map_err(|error| BleError::FileError(format!("转换文件选择结果失败: {error}")))?
+        .into();
+    parse_picker_result(&raw).map_err(BleError::FileError)
+}
+
+pub fn clear_result(request_id: u64) -> Result<(), BleError> {
+    let vm = super::connection_android::java_vm_ref().ok_or_else(|| {
+        BleError::ConnectFailed("JavaVM 未初始化（BleRfcomm.init 未调用）".into())
+    })?;
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|error| BleError::ConnectFailed(format!("JNI attach 失败: {error}")))?;
+    let class =
+        super::connection_android::find_app_class(&mut env, "com/minstall/app/BleFilePicker")?;
+    let request_id = request_id_to_jlong(request_id)?;
+    env.call_static_method(class, "clearResult", "(J)V", &[JValue::Long(request_id)])
+        .map_err(|error| BleError::FileError(format!("清理文件选择结果失败: {error}")))?;
+    Ok(())
+}
+
+/// 按文件名读取持久授权 URI；失败返回空 Vec。
+pub fn read_bytes(name: &str) -> Result<Vec<u8>, BleError> {
+    let vm = super::connection_android::java_vm_ref().ok_or_else(|| {
+        BleError::ConnectFailed("JavaVM 未初始化（BleRfcomm.init 未调用）".into())
+    })?;
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|error| BleError::ConnectFailed(format!("JNI attach 失败: {error}")))?;
+    let class =
+        super::connection_android::find_app_class(&mut env, "com/minstall/app/BleFilePicker")?;
+    let name = env
         .new_string(name)
-        .map_err(|e| BleError::ConnectFailed(format!("JNI 字符串失败: {e}")))?;
-    let jname_obj: jni::objects::JObject = jname.into();
-    let arr = env
+        .map_err(|error| BleError::FileError(format!("转换文件名失败: {error}")))?;
+    let name: JObject = name.into();
+    let result = env
         .call_static_method(
             class,
             "readBytes",
             "(Ljava/lang/String;)[B",
-            &[JValue::Object(&jname_obj)],
+            &[JValue::Object(&name)],
         )
-        .map_err(|e| BleError::ConnectFailed(format!("JNI 调 readBytes 失败: {e}")))?
+        .map_err(|error| BleError::FileError(format!("读取所选文件失败: {error}")))?
         .l()
-        .map_err(|e| BleError::ConnectFailed(format!("JNI 返回数组失败: {e}")))?;
-    if arr.is_null() {
+        .map_err(|error| BleError::FileError(format!("读取文件字节数组失败: {error}")))?;
+    if result.is_null() {
         return Ok(Vec::new());
     }
-    let arr_ref: jni::objects::JByteArray = jni::objects::JObject::from(arr).into();
-    let len = env
-        .get_array_length(&arr_ref)
-        .map_err(|e| BleError::ConnectFailed(format!("数组长度失败: {e}")))?;
-    let mut buf = vec![0i8; len as usize];
-    env.get_byte_array_region(&arr_ref, 0, &mut buf)
-        .map_err(|e| BleError::ConnectFailed(format!("读取字节失败: {e}")))?;
-    Ok(buf.into_iter().map(|b| b as u8).collect())
+    let bytes: jni::objects::JByteArray = result.into();
+    env.convert_byte_array(&bytes)
+        .map_err(|error| BleError::FileError(format!("转换文件字节失败: {error}")))
 }

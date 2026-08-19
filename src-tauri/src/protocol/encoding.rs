@@ -5,7 +5,10 @@
 
 use aes::Aes128;
 use ccm::aead::{Aead, Payload};
-use ccm::{consts::{U4, U12}, Ccm, Nonce};
+use ccm::{
+    consts::{U12, U4},
+    Ccm, Nonce,
+};
 use ctr::cipher::{KeyIvInit, StreamCipher};
 use ctr::Ctr128BE;
 use hmac::{Hmac, Mac};
@@ -120,7 +123,7 @@ impl V2Accumulator {
                     self.buf.drain(..consumed);
                     frames.push((pt, seq, payload));
                 }
-                Ok(None) => break, // 不完整，等更多数据
+                Ok(None) => break,       // 不完整，等更多数据
                 Err(_) => self.resync(), // 非法前缀，丢弃对齐
             }
         }
@@ -148,7 +151,10 @@ pub struct SppChannel<'a, S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpi
 
 impl<'a, S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin> SppChannel<'a, S> {
     pub fn new(stream: &'a mut S) -> Self {
-        Self { stream, acc: V2Accumulator::new() }
+        Self {
+            stream,
+            acc: V2Accumulator::new(),
+        }
     }
 
     pub async fn write(&mut self, data: &[u8]) -> Result<(), String> {
@@ -163,7 +169,11 @@ impl<'a, S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin> SppChannel<'a,
     pub async fn read_more(&mut self) -> Result<bool, String> {
         use tokio::io::AsyncReadExt;
         let mut buf = [0u8; 8192];
-        let n = self.stream.read(&mut buf).await.map_err(|e| format!("SPP 读取失败: {e}"))?;
+        let n = self
+            .stream
+            .read(&mut buf)
+            .await
+            .map_err(|e| format!("SPP 读取失败: {e}"))?;
         if n == 0 {
             return Ok(false);
         }
@@ -182,7 +192,6 @@ impl<'a, S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin> SppChannel<'a,
         Ok(frames)
     }
 }
-
 
 pub fn build_ack_frame(seq: u8) -> Vec<u8> {
     encode_v2_frame(V2_PACKET_ACK, seq, &[])
@@ -322,7 +331,11 @@ fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
 }
 
 /// 派生 64B 会话材料：(0-15)decKey (16-31)encKey (32-35)decNonce (36-39)encNonce。
-pub fn derive_session(secret: &[u8; 16], phone_nonce: &[u8; 16], watch_nonce: &[u8; 16]) -> [u8; 64] {
+pub fn derive_session(
+    secret: &[u8; 16],
+    phone_nonce: &[u8; 16],
+    watch_nonce: &[u8; 16],
+) -> [u8; 64] {
     let mut k = Vec::with_capacity(32);
     k.extend_from_slice(phone_nonce);
     k.extend_from_slice(watch_nonce);
@@ -376,9 +389,16 @@ pub fn encrypt_v1(key: &[u8], enc_nonce4: &[u8], counter: u32, payload: &[u8]) -
     nonce[0..4].copy_from_slice(enc_nonce4);
     nonce[4..8].copy_from_slice(&[0u8; 4]);
     nonce[8..12].copy_from_slice(&counter.to_le_bytes());
-    let cipher = <Aes128Ccm4 as ccm::aead::KeyInit>::new_from_slice(key).expect("AES-128 key 16 字节");
+    let cipher =
+        <Aes128Ccm4 as ccm::aead::KeyInit>::new_from_slice(key).expect("AES-128 key 16 字节");
     cipher
-        .encrypt(Nonce::from_slice(&nonce), Payload { msg: payload, aad: &[] })
+        .encrypt(
+            Nonce::from_slice(&nonce),
+            Payload {
+                msg: payload,
+                aad: &[],
+            },
+        )
         .expect("CCM 加密")
 }
 
@@ -422,7 +442,12 @@ pub fn parse_authkey(authkey_hex: &str) -> Option<[u8; 16]> {
 // ---------------------------------------------------------------------------
 
 /// WearPacket{type=1, id=2, payload_field=body}。payload_field 为字段号（WatchFace=6, Mass=24）。
-fn encode_wear_packet(pkt_type: u8, pkt_id: u8, payload_field: u64, payload_body: &[u8]) -> Vec<u8> {
+fn encode_wear_packet(
+    pkt_type: u8,
+    pkt_id: u8,
+    payload_field: u64,
+    payload_body: &[u8],
+) -> Vec<u8> {
     let mut out = field_varint(1, pkt_type as u64);
     out.extend_from_slice(&field_varint(2, pkt_id as u64));
     out.extend_from_slice(&field_bytes(payload_field, payload_body));
@@ -435,16 +460,30 @@ pub fn encode_watchface_prepare(watchface_id: &str, size: u32) -> Vec<u8> {
     info.extend_from_slice(&field_varint(2, size as u64));
     info.extend_from_slice(&field_varint(3, 65536));
     let wf = field_bytes(6, &info); // WatchFace payload（字段 6）
-    encode_wear_packet(WEARPACKET_TYPE_WATCH_FACE, WP_ID_PREPARE_INSTALL_WATCH_FACE, 6, &wf)
+    encode_wear_packet(
+        WEARPACKET_TYPE_WATCH_FACE,
+        WP_ID_PREPARE_INSTALL_WATCH_FACE,
+        6,
+        &wf,
+    )
 }
 
-/// Mass PREPARE（prepare_request{data_type=16, data_id=md5, data_length}）。
+/// Mass PREPARE（prepare_request{data_type, data_id=md5, data_length}）。
 pub fn encode_mass_prepare(md5: &[u8], size: u32) -> Vec<u8> {
-    let mut req = field_varint(1, MASS_DATA_TYPE as u64);
+    encode_mass_prepare_with_type(md5, size, MASS_DATA_TYPE)
+}
+
+pub(crate) fn encode_mass_prepare_with_type(md5: &[u8], size: u32, data_type: u8) -> Vec<u8> {
+    let mut req = field_varint(1, data_type as u64);
     req.extend_from_slice(&field_bytes(2, md5));
     req.extend_from_slice(&field_varint(3, size as u64));
     let mass = field_bytes(1, &req); // Mass payload（字段 24，非 7！）
-    encode_wear_packet(WEARPACKET_TYPE_MASS, WP_ID_MASS_PREPARE, WEARPACKET_PAYLOAD_MASS as u64, &mass)
+    encode_wear_packet(
+        WEARPACKET_TYPE_MASS,
+        WP_ID_MASS_PREPARE,
+        WEARPACKET_PAYLOAD_MASS as u64,
+        &mass,
+    )
 }
 
 /// 解析收包 WearPacket 关键字段。
@@ -590,6 +629,45 @@ pub fn parse_wear_packet(data: &[u8]) -> Option<WearPacket> {
             }
         }
     }
+    // ThirdpartyApp payload（字段 22）：快应用安装响应/结果。
+    for (num, val) in &fields {
+        if *num != WEARPACKET_PAYLOAD_THIRDPARTY_APP as u64 {
+            continue;
+        }
+        let ProtoVal::Bytes(thirdparty) = val else {
+            continue;
+        };
+        let thirdparty = parse_proto_fields(thirdparty).ok()?;
+        for (third_num, third_val) in &thirdparty {
+            match (third_num, third_val) {
+                (3, ProtoVal::Bytes(response)) => {
+                    if let Ok(response) = parse_proto_fields(response) {
+                        for (response_num, response_val) in &response {
+                            if let ProtoVal::Varint(value) = response_val {
+                                if *response_num == 1 {
+                                    wp.prepare_status = Some(*value as u8);
+                                } else if *response_num == 2 {
+                                    wp.slice_length = Some(*value as usize);
+                                }
+                            }
+                        }
+                    }
+                }
+                (4, ProtoVal::Bytes(result)) => {
+                    if let Ok(result) = parse_proto_fields(result) {
+                        for (result_num, result_val) in &result {
+                            if *result_num == 1 {
+                                if let ProtoVal::Varint(value) = result_val {
+                                    wp.install_result_code = Some(*value as u8);
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
     Some(wp)
 }
 
@@ -658,7 +736,10 @@ pub fn encode_command_watch_nonce(nonce: &[u8], hmac: &[u8]) -> Vec<u8> {
 
 /// Command{type=1, subtype=27(CMD_AUTH), Auth{authStep3=32}}
 pub fn encode_command_auth_step3(encrypted_nonces: &[u8], encrypted_device_info: &[u8]) -> Vec<u8> {
-    let auth = field_bytes(32, &encode_auth_step3(encrypted_nonces, encrypted_device_info));
+    let auth = field_bytes(
+        32,
+        &encode_auth_step3(encrypted_nonces, encrypted_device_info),
+    );
     encode_command(1, Some(27), Some(&auth))
 }
 
@@ -764,7 +845,13 @@ mod tests {
             let rev = format!("{crc:032b}").chars().rev().collect::<String>();
             (u32::from_str_radix(&rev, 2).unwrap() >> 16) as u16
         }
-        for data in [&b""[..], b"\x00", b"\xa5\xa5", &(0..=255u8).collect::<Vec<_>>(), b"hello world"] {
+        for data in [
+            &b""[..],
+            b"\x00",
+            b"\xa5\xa5",
+            &(0..=255u8).collect::<Vec<_>>(),
+            b"hello world",
+        ] {
             assert_eq!(crc16_arc(data), crc_kotlin_form(data));
         }
     }
@@ -895,9 +982,18 @@ mod tests {
     #[test]
     fn parse_authkey_accepts_0x_prefix() {
         let expect = hex("abababababababababababababababab");
-        assert_eq!(parse_authkey("abababababababababababababababab"), Some(expect.clone().try_into().unwrap()));
-        assert_eq!(parse_authkey("0xabababababababababababababababab"), Some(expect.clone().try_into().unwrap()));
-        assert_eq!(parse_authkey("0Xabababababababababababababababab"), Some(expect.clone().try_into().unwrap()));
+        assert_eq!(
+            parse_authkey("abababababababababababababababab"),
+            Some(expect.clone().try_into().unwrap())
+        );
+        assert_eq!(
+            parse_authkey("0xabababababababababababababababab"),
+            Some(expect.clone().try_into().unwrap())
+        );
+        assert_eq!(
+            parse_authkey("0Xabababababababababababababababab"),
+            Some(expect.clone().try_into().unwrap())
+        );
         assert_eq!(parse_authkey("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"), None);
         assert_eq!(parse_authkey("ab"), None);
     }
@@ -916,7 +1012,7 @@ mod tests {
         let mass = encode_mass_prepare(&[0x11; 16], 100);
         assert_eq!(mass[0..2], [0x08, 0x16]); // type=MASS(22)
         assert_eq!(mass[2..4], [0x10, 0x00]); // id=PREPARE(0)
-        // payload 字段应为 24（oneof）
+                                              // payload 字段应为 24（oneof）
         let mass_payload_field = mass[4] >> 3;
         assert_eq!(mass_payload_field, 24);
         let wp = parse_wear_packet(&mass).unwrap();

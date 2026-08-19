@@ -10,6 +10,7 @@ pub mod authkey_android;
 pub mod file_picker_android;
 
 pub mod errors;
+pub mod file_picker;
 
 #[cfg(target_os = "linux")]
 pub mod connection;
